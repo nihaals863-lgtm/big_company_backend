@@ -17,51 +17,92 @@ export interface PipingMeterRechargeResult {
     error?: string;
 }
 
+// async function rechargePipingGasMeter(meterNo: string, amount: number) {
+//     // 1. Call login API
+//     const loginPayload = {
+//       action: "lorawanMeter",
+//       method: "toLogin",
+//       params: {
+//         username: "Rwanda_Kayitare",
+//         password: "123456"
+//       }
+//     };
+
+//     const loginResponse = await axios.post(
+//       "http://english.energyy.ucskype.com/api/commonInternal.jsp",
+//       `requestParams=${encodeURIComponent(JSON.stringify(loginPayload))}`,
+//       { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
+//     );
+
+//     // 2. Extract apiToken
+//     const apiToken = loginResponse.data?.value?.apiToken;
+
+//     if (!apiToken) {
+//         throw new Error("Failed to get API Token from Login");
+//     }
+
+//     // 3. Call recharge API
+//     const rechargePayload = {
+//       action: "lorawanMeter",
+//       method: "recharge",
+//       params: {
+//         meterNo: meterNo,
+//         amount: String(amount),
+//         apiToken: apiToken
+//       }
+//     };
+
+//     const rechargeResponse = await axios.post(
+//       "http://english.energyy.ucskype.com/api/commonInternal.jsp",
+//       `requestParams=${encodeURIComponent(JSON.stringify(rechargePayload))}`,
+//       { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
+//     );
+
+//     // 4. Return response
+//     return rechargeResponse.data;
+// }
 async function rechargePipingGasMeter(meterNo: string, amount: number) {
-    // 1. Call login API
+
     const loginPayload = {
-      action: "lorawanMeter",
-      method: "toLogin",
-      params: {
-        username: "Rwanda_Kayitare",
-        password: "123456"
-      }
+        action: "lorawanMeter",
+        method: "toLogin",
+        params: {
+            username: "Rwanda_Kayitare",
+            password: "123456"
+        }
     };
 
     const loginResponse = await axios.post(
-      "http://english.energyy.ucskype.com/api/commonInternal.jsp",
-      `requestParams=${encodeURIComponent(JSON.stringify(loginPayload))}`,
-      { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
+        "http://english.energyy.ucskype.com/api/commonInternal.jsp",
+        `requestParams=${encodeURIComponent(JSON.stringify(loginPayload))}`,
+        { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
     );
 
-    // 2. Extract apiToken
     const apiToken = loginResponse.data?.value?.apiToken;
 
     if (!apiToken) {
         throw new Error("Failed to get API Token from Login");
     }
 
-    // 3. Call recharge API
     const rechargePayload = {
-      action: "lorawanMeter",
-      method: "recharge",
-      params: {
-        meterNo: meterNo,
-        amount: String(amount),
-        apiToken: apiToken
-      }
+        action: "lorawanMeter",
+        method: "remotelyTopUp",
+        apiToken: apiToken,
+        param: {
+            devEui: meterNo,
+            topUpAmount: String(amount),
+            topUpToDeviceAmount: String(amount)
+        }
     };
 
     const rechargeResponse = await axios.post(
-      "http://english.energyy.ucskype.com/api/commonInternal.jsp",
-      `requestParams=${encodeURIComponent(JSON.stringify(rechargePayload))}`,
-      { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
+        "http://english.energyy.ucskype.com/api/commonInternal.jsp",
+        `requestParams=${encodeURIComponent(JSON.stringify(rechargePayload))}`,
+        { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
     );
 
-    // 4. Return response
     return rechargeResponse.data;
 }
-
 class PipingMeterService {
 
     async rechargePipingMeter(params: PipingMeterRechargeParams): Promise<PipingMeterRechargeResult> {
@@ -84,7 +125,7 @@ class PipingMeterService {
         // ── PRODUCTION: real Lorawan API call ────────────────────────────
         try {
             console.log(`[PipingMeter] Initiating top-up for ${params.amount} on meter ${params.meterNumber}...`);
-            
+
             const responseData = await rechargePipingGasMeter(params.meterNumber, params.amount);
             console.log(`[PipingMeter] API Response:`, JSON.stringify(responseData));
 
