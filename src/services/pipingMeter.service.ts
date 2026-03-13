@@ -89,7 +89,7 @@ async function rechargePipingGasMeter(meterNo: string, amount: number) {
         method: "remotelyTopUp",
         apiToken: apiToken,
         param: {
-            deveui: meterNo,
+            devEui: meterNo.padStart(16, '0'),
             topUpAmount: String(amount),
             topUpToDeviceAmount: String(amount)
         }
