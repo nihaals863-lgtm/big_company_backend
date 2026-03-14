@@ -2,7 +2,8 @@ import axios from 'axios';
 
 export interface PipingMeterRechargeParams {
     meterNumber: string;
-    amount: number;        // Amount in RWF
+    amount?: number;       // Now optional if token is provided
+    token?: string;        // Added for token-based recharge
     customerRef: string;   // Internal tracking reference
     customerPhone?: string;
 }
@@ -61,19 +62,19 @@ export interface PipingMeterRechargeResult {
 //     // 4. Return response
 //     return rechargeResponse.data;
 // }
-async function rechargePipingGasMeter(meterNo: string, amount: number) {
+async function callPipingMeterApi(params: { devEui: string, amount?: number, token?: string }) {
+    const baseUrl = process.env.LORAWAN_BASE_URL || 'http://english.energyy.ucskype.com';
+    const username = process.env.LORAWAN_USERNAME || 'Rwanda_Kayitare';
+    const password = process.env.LORAWAN_PASSWORD || '123456';
 
     const loginPayload = {
         action: "lorawanMeter",
         method: "toLogin",
-        params: {
-            username: "Rwanda_Kayitare",
-            password: "123456"
-        }
+        params: { username, password }
     };
 
     const loginResponse = await axios.post(
-        "http://english.energyy.ucskype.com/api/commonInternal.jsp",
+        `${baseUrl}/api/commonInternal.jsp`,
         `requestParams=${encodeURIComponent(JSON.stringify(loginPayload))}`,
         { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
     );
@@ -84,25 +85,33 @@ async function rechargePipingGasMeter(meterNo: string, amount: number) {
         throw new Error("Failed to get API Token from Login");
     }
 
+    const method = params.token ? 'rechargeToken' : 'remotelyTopUp';
+    const methodParams: any = { devEui: params.devEui };
+
+    if (params.token) {
+        methodParams.token = params.token;
+    } else if (params.amount !== undefined) {
+        const amtStr = String(params.amount);
+        methodParams.topUpAmount = amtStr;
+        methodParams.topUpToDeviceAmount = amtStr;
+    }
+
     const rechargePayload = {
         action: "lorawanMeter",
-        method: "remotelyTopUp",
+        method,
         apiToken: apiToken,
-        param: {
-            devEui: meterNo,
-            topUpAmount: String(amount),
-            topUpToDeviceAmount: String(amount)
-        }
+        param: methodParams
     };
 
     const rechargeResponse = await axios.post(
-        "http://english.energyy.ucskype.com/api/commonInternal.jsp",
+        `${baseUrl}/api/commonInternal.jsp`,
         `requestParams=${encodeURIComponent(JSON.stringify(rechargePayload))}`,
         { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
     );
 
     return rechargeResponse.data;
 }
+
 class PipingMeterService {
 
     async rechargePipingMeter(params: PipingMeterRechargeParams): Promise<PipingMeterRechargeResult> {
@@ -110,8 +119,8 @@ class PipingMeterService {
 
         // ── DEV MODE: return a simulated success ─────────────────────────
         if (isDev) {
-            console.log(`🛠️ [PipingMeter DEV] Simulating Lorawan recharge for meter: ${params.meterNumber}, Amount: ${params.amount}`);
-            const units = this.calculateUnits(params.amount);
+            console.log(`🛠️ [PipingMeter DEV] Simulating Lorawan recharge. Method: ${params.token ? 'rechargeToken' : 'remotelyTopUp'}, Meter: ${params.meterNumber}`);
+            const units = params.amount ? this.calculateUnits(params.amount) : 0;
             return {
                 success: true,
                 meterNumber: params.meterNumber,
@@ -124,9 +133,14 @@ class PipingMeterService {
 
         // ── PRODUCTION: real Lorawan API call ────────────────────────────
         try {
-            console.log(`[PipingMeter] Initiating top-up for ${params.amount} on meter ${params.meterNumber}...`);
+            const method = params.token ? 'rechargeToken' : 'remotelyTopUp';
+            console.log(`[PipingMeter] Initiating ${method} for meter ${params.meterNumber}...`);
 
-            const responseData = await rechargePipingGasMeter(params.meterNumber, params.amount);
+            const responseData = await callPipingMeterApi({
+                devEui: params.meterNumber,
+                amount: params.amount,
+                token: params.token
+            });
             console.log(`[PipingMeter] API Response:`, JSON.stringify(responseData));
 
             // Check success based on errcode (usually 0 is success)

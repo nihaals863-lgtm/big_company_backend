@@ -30,6 +30,7 @@ export const initiateGasMeterRecharge = async (req: AuthRequest, res: Response) 
         cardId,
         provider,            // 'stronpower' (default) | 'zhongyi'
         isVendByUnit,       // New: true = unit-based, false = money-based
+        token,              // New: for remote Piping token pushes
     } = req.body;
 
     // Always sanitize — trim whitespace, remove any MTR- prefix
@@ -208,9 +209,9 @@ export const initiateGasMeterRecharge = async (req: AuthRequest, res: Response) 
             apiResult = await pipingMeterService.rechargePipingMeter({
                 meterNumber,
                 amount: parsedAmount,
+                token: token,
                 customerRef,
                 customerPhone: phone,
-                // Piping meter usually doesn't support unit-based vending in same way as token
             });
         }
     } catch (apiError: any) {
@@ -284,7 +285,7 @@ export const initiateGasMeterRecharge = async (req: AuthRequest, res: Response) 
             try {
                 const totalMoneyAmount = isVendByUnit ? parsedAmount * 1500 : parsedAmount;
                 if (!consumerProfileId) return; // Cannot refund if no profile (though unlikely if payment succeeded)
-                
+
                 const wallet = await prisma.wallet.findFirst({
                     where: { consumerId: consumerProfileId, type: 'dashboard_wallet' },
                 });
