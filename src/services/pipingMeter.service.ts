@@ -86,14 +86,20 @@ async function callPipingMeterApi(params: { devEui: string, amount?: number, tok
     }
 
     const method = params.token ? 'rechargeToken' : 'remotelyTopUp';
-    const methodParams: any = { nbonetNetImei: params.devEui };
+    const methodParams: any = {};
 
     if (params.token) {
+        // Lowercase imei for rechargeToken method!
+        methodParams.imei = params.devEui; 
         methodParams.token = params.token;
-    } else if (params.amount !== undefined) {
-        const amtStr = String(params.amount);
-        methodParams.topUpAmount = amtStr;
-        methodParams.topUpToDeviceAmount = amtStr;
+    } else {
+        // use nbonetNetImei for remotelyTopUp (Ordinary) method!
+        methodParams.nbonetNetImei = params.devEui; 
+        if (params.amount !== undefined) {
+            const amtStr = String(params.amount);
+            methodParams.topUpAmount = amtStr;
+            methodParams.topUpToDeviceAmount = amtStr;
+        }
     }
 
     const rechargePayload = {

@@ -39,11 +39,13 @@ export const initiateGasMeterRecharge = async (req: AuthRequest, res: Response) 
     const customerRef = `GASRCH-${meterType}-${Date.now()}`;
     const selectedProvider: string = (provider || 'stronpower').toLowerCase();
 
+    const isPushToken = meterType === 'PIPING' && !!token;
+
     // --- Validate required fields ---
-    if (!meterNumber || !meterType || !amount) {
+    if (!meterNumber || !meterType || (!isPushToken && !amount)) {
         return res.status(400).json({
             success: false,
-            error: 'meterNumber, meterType, and amount are required.',
+            error: 'meterNumber, meterType, and amount (or token) are required.',
         });
     }
 
@@ -54,8 +56,8 @@ export const initiateGasMeterRecharge = async (req: AuthRequest, res: Response) 
         });
     }
 
-    const parsedAmount = Number(amount);
-    if (isNaN(parsedAmount) || parsedAmount <= 0) {
+    const parsedAmount = Number(amount || 0);
+    if (!isPushToken && (isNaN(parsedAmount) || parsedAmount <= 0)) {
         return res.status(400).json({
             success: false,
             error: 'Amount must be a positive number.',
@@ -63,7 +65,7 @@ export const initiateGasMeterRecharge = async (req: AuthRequest, res: Response) 
     }
 
     // Minimum recharge check (only for money-based)
-    if (!isVendByUnit && parsedAmount < 500) {
+    if (!isPushToken && !isVendByUnit && parsedAmount < 500) {
         return res.status(400).json({
             success: false,
             error: 'Minimum recharge amount is 500 RWF.',
@@ -209,7 +211,7 @@ export const initiateGasMeterRecharge = async (req: AuthRequest, res: Response) 
             apiResult = await pipingMeterService.rechargePipingMeter({
                 meterNumber,
                 amount: parsedAmount,
-                token: token,
+                token: token ? String(token).replace(/\s+/g, '') : undefined,
                 customerRef,
                 customerPhone: phone,
             });
