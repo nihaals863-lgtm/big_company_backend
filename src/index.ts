@@ -38,7 +38,8 @@ const allowedOrigins = [
   "https://big-pos-backend-production.up.railway.app",
   "https://big-pos.netlify.app",
   "https://bigpos.kiaantechnology.com",
-  "https://mysql-production-2fb1.up.railway.app"
+  "https://mysql-production-2fb1.up.railway.app",
+  "https://bigcompanybackend-production.up.railway.app"
 ];
 
 app.use(cors({

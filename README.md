@@ -256,7 +256,7 @@ npx prisma db push --force-reset
 # Re-seed database
 npm run seed
 ```
-
+                
 ### Testing API
 
 You can test the API using:
@@ -272,7 +272,7 @@ curl -X POST https://big-company-production.up.railway.app/retailer/auth/login \
   -H "Content-Type: application/json" \
   -d '{"email":"retailer@bigcompany.rw","password":"retailer123"}'
 ```
-
+  
 ## Notes
 
 - All passwords are hashed using bcryptjs

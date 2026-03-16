@@ -86,7 +86,7 @@ async function callPipingMeterApi(params: { devEui: string, amount?: number, tok
     }
 
     const method = params.token ? 'rechargeToken' : 'remotelyTopUp';
-    const methodParams: any = { devEui: params.devEui };
+    const methodParams: any = { nbonetNetImei: params.devEui };
 
     if (params.token) {
         methodParams.token = params.token;
@@ -97,7 +97,7 @@ async function callPipingMeterApi(params: { devEui: string, amount?: number, tok
     }
 
     const rechargePayload = {
-        action: "lorawanMeter",
+        action: "zlMeter",
         method,
         apiToken: apiToken,
         param: methodParams
