@@ -88,7 +88,15 @@ class TokenMeterService {
             );
 
             console.log("STRONPOWER VendingMeter RESPONSE:", response.data);
-            return this.handleResponse(response, params);
+            const result = this.handleResponse(response, params);
+
+            // AUTO FALLBACK FOR UNREGISTERED METERS
+            if (!result.success && result.error?.includes('Empty response')) {
+                console.log(`[TokenMeter] Meter ${params.meterNumber} likely unregistered. Falling back to VendingMeterDirectly...`);
+                return await this.directVendMeter(params);
+            }
+
+            return result;
 
         } catch (error: any) {
             return this.handleError(error);
