@@ -355,7 +355,7 @@ model ConsumerProfile {
   rewardsPoints    Float             @default(0)
   address          String?
   fullName         String?
-  isVerified       Boolean           @default(false)
+  isVerified       Boolean           @default(false)  
   landmark         String?
   membershipType   String            @default("standard")
   gasRewardWalletId String?          @unique

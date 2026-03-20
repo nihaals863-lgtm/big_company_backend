@@ -243,25 +243,50 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
         });
       } else if (paymentMethod === 'nfc_card' && amountToPay > 0) {
         console.log('Processing NFC payment...');
-        const { cardId } = req.body;
-        if (!cardId) throw new Error('Card ID is required for NFC payment');
+        const { cardId, cardUid, pin } = req.body;
+        if (!cardId && !cardUid) throw new Error('Card identifier (ID or UID) is required for NFC payment');
 
-        const card = await tx.nfcCard.findUnique({
-          where: { id: Number(cardId) }
+        const card = await tx.nfcCard.findFirst({
+          where: cardUid ? { uid: String(cardUid) } : { id: Number(cardId) }
         });
 
         if (!card || card.consumerId !== consumerProfile.id) {
           throw new Error('Invalid NFC card');
         }
 
-        if (card.balance < amountToPay) {
-          throw new Error(`Insufficient card balance. Required: ${amountToPay} RWF`);
+        if (card.status !== 'active') {
+          throw new Error('NFC card is not active');
         }
 
-        console.log('Deducting from NFC card...');
-        await tx.nfcCard.update({
-          where: { id: card.id },
+        // Validate PIN per requirement
+        if (!pin) throw new Error('PIN is required for NFC payment');
+        if (card.pin && card.pin !== pin) {
+          throw new Error('Invalid PIN');
+        }
+
+        // Deduct from wallet instead of card balance
+        const dashboardWallet = await tx.wallet.findFirst({
+          where: { consumerId: consumerProfile.id, type: 'dashboard_wallet' }
+        });
+
+        if (!dashboardWallet || dashboardWallet.balance < amountToPay) {
+          throw new Error(`Insufficient wallet balance. Required: ${amountToPay} RWF`);
+        }
+
+        console.log('Deducting from dashboard wallet via NFC verification...');
+        await tx.wallet.update({
+          where: { id: dashboardWallet.id },
           data: { balance: { decrement: amountToPay } }
+        });
+
+        await tx.walletTransaction.create({
+          data: {
+            walletId: dashboardWallet.id,
+            type: 'purchase_nfc',
+            amount: -amountToPay,
+            description: `Payment to Retailer via NFC Card (${card.uid.slice(-4)})`,
+            status: 'completed'
+          }
         });
       }
       // Mobile money is handled externally / async usually, but here we assume confirmed status or synchronous simulation for POS

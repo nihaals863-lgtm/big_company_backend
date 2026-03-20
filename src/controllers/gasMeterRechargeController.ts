@@ -2,7 +2,7 @@ import { Response } from 'express';
 import { AuthRequest } from '../middleware/authMiddleware';
 import prisma from '../utils/prisma';
 import tokenMeterService from '../services/tokenMeter.service';
-import pipingMeterService from '../services/pipingMeter.service';
+// import pipingMeterService from '../services/pipingMeter.service';
 import zhongyiMeterService from '../services/zhongyiMeter.service';
 
 /**
@@ -122,26 +122,66 @@ export const initiateGasMeterRecharge = async (req: AuthRequest, res: Response) 
             });
 
         } else if (userId && paymentMethod === 'nfc_card') {
-            if (!cardId) {
-                return res.status(400).json({ success: false, error: 'cardId is required for NFC card payment.' });
+            // EV3 UID Integration: Support reading card by UID directly
+            const { cardUid } = req.body; 
+            
+            if (!cardUid && !cardId) {
+                return res.status(400).json({ success: false, error: 'cardUid or cardId is required for NFC card payment.' });
             }
 
             const card = await prisma.nfcCard.findFirst({
-                where: { id: Number(cardId) },
+                where: cardUid ? { uid: String(cardUid) } : { id: Number(cardId) },
             });
 
             const totalMoneyAmount = isVendByUnit ? parsedAmount * 1500 : parsedAmount;
 
-            if (!card || card.balance < totalMoneyAmount) {
-                return res.status(400).json({
-                    success: false,
-                    error: `Insufficient NFC card balance.`,
-                });
+            if (!card) {
+                return res.status(404).json({ success: false, error: 'NFC card not found.' });
             }
 
-            await prisma.nfcCard.update({
-                where: { id: card.id },
+            // EV3 support: Validate card status & prepare for mutual auth validation 
+            if (card.status !== 'active') {
+                return res.status(400).json({ success: false, error: 'NFC card is not active.' });
+            }
+
+            if (!card.consumerId) {
+                return res.status(400).json({ success: false, error: 'Card or user wallet not linked.' });
+            }
+
+            // Wallet-driven payment deduction logic
+            const wallet = await prisma.wallet.findFirst({
+                where: { consumerId: card.consumerId, type: 'dashboard_wallet' }
+            });
+
+            if (!wallet || wallet.balance < totalMoneyAmount) {
+                return res.status(400).json({ success: false, error: `Insufficient wallet balance.` });
+            }
+
+            const { pin } = req.body;
+            if (!pin) {
+                return res.status(400).json({ success: false, error: 'PIN is required for NFC payment.' });
+            }
+
+            if (card.pin && card.pin !== pin) {
+                return res.status(400).json({ success: false, error: 'Invalid PIN.' });
+            }
+
+            // Mutual authentication structure placeholder (hardware handles it)
+            // if (!verifyMutualAuth(card, req.body.authSignature)) { return ... }
+
+            await prisma.wallet.update({
+                where: { id: wallet.id },
                 data: { balance: { decrement: totalMoneyAmount } },
+            });
+
+            await prisma.walletTransaction.create({
+                data: {
+                    walletId: wallet.id,
+                    type: 'gas_meter_recharge',
+                    amount: -totalMoneyAmount,
+                    description: `${meterType} Gas Meter Recharge via NFC Card - ${meterNumber}`,
+                    status: 'completed',
+                },
             });
 
         } else if (paymentMethod === 'mobile_money') {
@@ -200,20 +240,14 @@ export const initiateGasMeterRecharge = async (req: AuthRequest, res: Response) 
                 amount: parsedAmount,
                 customerRef,
             });
-        } else if (meterType === 'TOKEN') {
+        } else {
+            // Requirement 1: Recharge flow restriction. Process Strictly via Token API ONLY.
+            // Disables or bypasses recharge logic using LoRaWAN API (pipingMeterService).
             apiResult = await tokenMeterService.rechargeTokenMeter({
                 meterNumber,
                 amount: parsedAmount,
                 customerRef,
                 isVendByUnit: !!isVendByUnit
-            });
-        } else {
-            apiResult = await pipingMeterService.rechargePipingMeter({
-                meterNumber,
-                amount: parsedAmount,
-                token: token ? String(token).replace(/\s+/g, '') : undefined,
-                customerRef,
-                customerPhone: phone,
             });
         }
     } catch (apiError: any) {

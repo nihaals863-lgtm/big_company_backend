@@ -121,60 +121,8 @@ async function callPipingMeterApi(params: { devEui: string, amount?: number, tok
 class PipingMeterService {
 
     async rechargePipingMeter(params: PipingMeterRechargeParams): Promise<PipingMeterRechargeResult> {
-        const isDev = process.env.DEV_MODE === 'true' || process.env.DEV_MODE === '1';
-
-        // ── DEV MODE: return a simulated success ─────────────────────────
-        if (isDev) {
-            console.log(`🛠️ [PipingMeter DEV] Simulating Lorawan recharge. Method: ${params.token ? 'rechargeToken' : 'remotelyTopUp'}, Meter: ${params.meterNumber}`);
-            const units = params.amount ? this.calculateUnits(params.amount) : 0;
-            return {
-                success: true,
-                meterNumber: params.meterNumber,
-                amount: params.amount,
-                units,
-                apiReference: `DEV-LORAWAN-${Date.now()}`,
-                message: `Piping meter recharged successfully with ${units} m³ (DEV_MODE)`,
-            };
-        }
-
-        // ── PRODUCTION: real Lorawan API call ────────────────────────────
-        try {
-            const method = params.token ? 'rechargeToken' : 'remotelyTopUp';
-            console.log(`[PipingMeter] Initiating ${method} for meter ${params.meterNumber}...`);
-
-            const responseData = await callPipingMeterApi({
-                devEui: params.meterNumber,
-                amount: params.amount,
-                token: params.token
-            });
-            console.log(`[PipingMeter] API Response:`, JSON.stringify(responseData));
-
-            // Check success based on errcode (usually 0 is success)
-            if (responseData?.errcode === '0' || responseData?.errcode === 0 || responseData?.success) {
-                const units = this.calculateUnits(params.amount);
-                return {
-                    success: true,
-                    meterNumber: params.meterNumber,
-                    amount: params.amount,
-                    units,
-                    apiReference: responseData?.value?.orderId || `API-${Date.now()}`,
-                    message: `Piping gas meter recharged successfully.`,
-                };
-            } else {
-                return {
-                    success: false,
-                    error: responseData?.errmsg || responseData?.message || 'Recharge failed on the provider side.',
-                    apiReference: String(Date.now()),
-                };
-            }
-
-        } catch (error: any) {
-            console.error('[PipingMeter] Unexpected error:', error.message);
-            return {
-                success: false,
-                error: error.message || 'Failed to connect to Piping Meter API',
-            };
-        }
+        // LoRaWAN recharge logic disabled per requirement
+        throw new Error("LoRaWAN/Piping API recharge is disabled. All recharges must go through Token API.");
     }
 
     private calculateUnits(amountRwf: number): number {
