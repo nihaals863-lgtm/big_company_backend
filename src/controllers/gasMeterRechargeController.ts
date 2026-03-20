@@ -252,7 +252,8 @@ export const initiateGasMeterRecharge = async (req: AuthRequest, res: Response) 
                 apiResult = await pipingMeterService.rechargePipingMeter({
                     meterNumber,
                     amount: parsedAmount,
-                    customerRef
+                    customerRef,
+                    token: token // Forward entered token if provided
                 });
             }
         }

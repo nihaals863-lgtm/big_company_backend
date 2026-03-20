@@ -85,22 +85,33 @@ async function callPipingMeterApi(params: { devEui: string, amount?: number, tok
         throw new Error("Failed to get API Token from Login");
     }
 
-    const method = params.token ? 'rechargeToken' : 'remotelyTopUp';
-    const methodParams: any = {};
+    if (!params.token) {
+        // Use lorawanMeter Action for regular GPRS Ordinary topup (GPRS Api token format)
+        const rechargePayload = {
+            action: "lorawanMeter",
+            method: "recharge",
+            params: {
+                meterNo: params.devEui,
+                amount: String(params.amount || 0),
+                apiToken: apiToken
+            }
+        };
 
-    if (params.token) {
-        // Lowercase imei for rechargeToken method!
-        methodParams.imei = params.devEui; 
-        methodParams.token = params.token;
-    } else {
-        // use nbonetNetImei for remotelyTopUp (Ordinary) method!
-        methodParams.nbonetNetImei = params.devEui; 
-        if (params.amount !== undefined) {
-            const amtStr = String(params.amount);
-            methodParams.topUpAmount = amtStr;
-            methodParams.topUpToDeviceAmount = amtStr;
-        }
+        const rechargeResponse = await axios.post(
+            `${baseUrl}/api/commonInternal.jsp`,
+            `requestParams=${encodeURIComponent(JSON.stringify(rechargePayload))}`,
+            { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
+        );
+
+        return rechargeResponse.data;
     }
+
+    // Token Push Mode requires 'zlMeter' and 'rechargeToken'
+    const method = 'rechargeToken';
+    const methodParams: any = {
+        imei: params.devEui,
+        token: params.token
+    };
 
     const rechargePayload = {
         action: "zlMeter",
