@@ -121,8 +121,36 @@ async function callPipingMeterApi(params: { devEui: string, amount?: number, tok
 class PipingMeterService {
 
     async rechargePipingMeter(params: PipingMeterRechargeParams): Promise<PipingMeterRechargeResult> {
-        // LoRaWAN recharge logic disabled per requirement
-        throw new Error("LoRaWAN/Piping API recharge is disabled. All recharges must go through Token API.");
+        try {
+            const apiParams = {
+                devEui: params.meterNumber,
+                amount: params.amount,
+                token: params.token
+            };
+
+            const response = await callPipingMeterApi(apiParams);
+
+            if (response && (response.success || response.errcode === "0" || response.errcode === 0)) {
+                return {
+                    success: true,
+                    meterNumber: params.meterNumber,
+                    amount: params.amount,
+                    units: this.calculateUnits(params.amount || 0),
+                    apiReference: response.value?.id || `PIPING-${Date.now()}`,
+                    message: response.msg || response.errmsg || 'Piping Meter top up successful',
+                };
+            } else {
+                return {
+                    success: false,
+                    error: response.msg || response.errmsg || 'Piping API Rejection',
+                };
+            }
+        } catch (error: any) {
+             return {
+                 success: false,
+                 error: error.message || 'Piping API call failed'
+             };
+        }
     }
 
     private calculateUnits(amountRwf: number): number {

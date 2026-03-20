@@ -2,7 +2,7 @@ import { Response } from 'express';
 import { AuthRequest } from '../middleware/authMiddleware';
 import prisma from '../utils/prisma';
 import tokenMeterService from '../services/tokenMeter.service';
-// import pipingMeterService from '../services/pipingMeter.service';
+import pipingMeterService from '../services/pipingMeter.service';
 import zhongyiMeterService from '../services/zhongyiMeter.service';
 
 /**
@@ -241,14 +241,20 @@ export const initiateGasMeterRecharge = async (req: AuthRequest, res: Response) 
                 customerRef,
             });
         } else {
-            // Requirement 1: Recharge flow restriction. Process Strictly via Token API ONLY.
-            // Disables or bypasses recharge logic using LoRaWAN API (pipingMeterService).
-            apiResult = await tokenMeterService.rechargeTokenMeter({
-                meterNumber,
-                amount: parsedAmount,
-                customerRef,
-                isVendByUnit: !!isVendByUnit
-            });
+            if (meterType === 'TOKEN') {
+                apiResult = await tokenMeterService.rechargeTokenMeter({
+                    meterNumber,
+                    amount: parsedAmount,
+                    customerRef,
+                    isVendByUnit: !!isVendByUnit
+                });
+            } else { // PIPING
+                apiResult = await pipingMeterService.rechargePipingMeter({
+                    meterNumber,
+                    amount: parsedAmount,
+                    customerRef
+                });
+            }
         }
     } catch (apiError: any) {
         await prisma.gasRechargeTransaction.update({
