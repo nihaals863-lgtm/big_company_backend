@@ -57,6 +57,8 @@ export const initiateGasMeterRecharge = async (req: AuthRequest, res: Response) 
     }
 
     const parsedAmount = Number(amount || 0);
+    const ratePerM3 = Number(process.env.LORAWAN_RATE_PER_M3) || 850;
+    const totalMoneyAmount = meterType === 'PIPING' ? parsedAmount * ratePerM3 : (isVendByUnit ? parsedAmount * 1500 : parsedAmount);
     if (!isPushToken && (isNaN(parsedAmount) || parsedAmount <= 0)) {
         return res.status(400).json({
             success: false,
@@ -95,7 +97,7 @@ export const initiateGasMeterRecharge = async (req: AuthRequest, res: Response) 
                 where: { consumerId: consumerProfileId, type: 'dashboard_wallet' },
             });
 
-            const totalMoneyAmount = isVendByUnit ? parsedAmount * 1500 : parsedAmount;
+            // Using global totalMoneyAmount
 
             if (!wallet || wallet.balance < totalMoneyAmount) {
                 return res.status(400).json({
@@ -123,8 +125,8 @@ export const initiateGasMeterRecharge = async (req: AuthRequest, res: Response) 
 
         } else if (userId && paymentMethod === 'nfc_card') {
             // EV3 UID Integration: Support reading card by UID directly
-            const { cardUid } = req.body; 
-            
+            const { cardUid } = req.body;
+
             if (!cardUid && !cardId) {
                 return res.status(400).json({ success: false, error: 'cardUid or cardId is required for NFC card payment.' });
             }
@@ -133,7 +135,7 @@ export const initiateGasMeterRecharge = async (req: AuthRequest, res: Response) 
                 where: cardUid ? { uid: String(cardUid) } : { id: Number(cardId) },
             });
 
-            const totalMoneyAmount = isVendByUnit ? parsedAmount * 1500 : parsedAmount;
+            // Using global totalMoneyAmount
 
             if (!card) {
                 return res.status(404).json({ success: false, error: 'NFC card not found.' });
@@ -185,7 +187,7 @@ export const initiateGasMeterRecharge = async (req: AuthRequest, res: Response) 
             });
 
         } else if (paymentMethod === 'mobile_money') {
-            const totalMoneyAmount = isVendByUnit ? parsedAmount * 1500 : parsedAmount;
+            // Using global totalMoneyAmount
             // Initiate PalmKash Mobile Money payment
             const palmKash = (await import('../services/palmKash.service')).default;
             const pmResult = await palmKash.initiatePayment({
@@ -468,4 +470,5 @@ export const getGasMeterRechargeTransaction = async (req: AuthRequest, res: Resp
         console.error('[GasRecharge] Transaction fetch error:', error.message);
         return res.status(500).json({ success: false, error: error.message });
     }
+
 };
