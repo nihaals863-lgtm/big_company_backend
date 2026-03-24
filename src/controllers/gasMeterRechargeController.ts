@@ -66,8 +66,8 @@ export const initiateGasMeterRecharge = async (req: AuthRequest, res: Response) 
         });
     }
 
-    // Minimum recharge check (only for money-based)
-    if (!isPushToken && !isVendByUnit && parsedAmount < 500) {
+    // Minimum recharge check (checks calculated money amount for minimum safeguard)
+    if (!isPushToken && !isVendByUnit && totalMoneyAmount < 500) {
         return res.status(400).json({
             success: false,
             error: 'Minimum recharge amount is 500 RWF.',
@@ -246,7 +246,7 @@ export const initiateGasMeterRecharge = async (req: AuthRequest, res: Response) 
             if (meterType === 'TOKEN') {
                 apiResult = await tokenMeterService.rechargeTokenMeter({
                     meterNumber,
-                    amount: parsedAmount,
+                    amount: totalMoneyAmount, // Pass total Money amount for STS token math
                     customerRef,
                     isVendByUnit: !!isVendByUnit
                 });
