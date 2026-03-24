@@ -58,7 +58,10 @@ export const initiateGasMeterRecharge = async (req: AuthRequest, res: Response) 
 
     const parsedAmount = Number(amount || 0);
     const ratePerM3 = Number(process.env.LORAWAN_RATE_PER_M3) || 850;
-    const totalMoneyAmount = meterType === 'PIPING' ? parsedAmount * ratePerM3 : (isVendByUnit ? parsedAmount * 1500 : parsedAmount);
+    // Both PIPING and TOKEN meters now receive Volume (m³) inputs from updated presets on frontend
+    const totalMoneyAmount = (meterType === 'PIPING' || meterType === 'TOKEN') 
+        ? parsedAmount * ratePerM3 
+        : (isVendByUnit ? parsedAmount * 1500 : parsedAmount);
     if (!isPushToken && (isNaN(parsedAmount) || parsedAmount <= 0)) {
         return res.status(400).json({
             success: false,
