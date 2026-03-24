@@ -57,8 +57,6 @@ export const initiateGasMeterRecharge = async (req: AuthRequest, res: Response) 
     }
 
     const parsedAmount = Number(amount || 0);
-    const ratePerM3 = Number(process.env.LORAWAN_RATE_PER_M3) || 850;
-    const totalMoneyAmount = meterType === 'PIPING' ? parsedAmount * ratePerM3 : (isVendByUnit ? parsedAmount * 1500 : parsedAmount);
     if (!isPushToken && (isNaN(parsedAmount) || parsedAmount <= 0)) {
         return res.status(400).json({
             success: false,
@@ -97,7 +95,7 @@ export const initiateGasMeterRecharge = async (req: AuthRequest, res: Response) 
                 where: { consumerId: consumerProfileId, type: 'dashboard_wallet' },
             });
 
-            // Using global totalMoneyAmount
+            const totalMoneyAmount = isVendByUnit ? parsedAmount * 1500 : parsedAmount;
 
             if (!wallet || wallet.balance < totalMoneyAmount) {
                 return res.status(400).json({
@@ -135,7 +133,7 @@ export const initiateGasMeterRecharge = async (req: AuthRequest, res: Response) 
                 where: cardUid ? { uid: String(cardUid) } : { id: Number(cardId) },
             });
 
-            // Using global totalMoneyAmount
+            const totalMoneyAmount = isVendByUnit ? parsedAmount * 1500 : parsedAmount;
 
             if (!card) {
                 return res.status(404).json({ success: false, error: 'NFC card not found.' });
@@ -187,7 +185,7 @@ export const initiateGasMeterRecharge = async (req: AuthRequest, res: Response) 
             });
 
         } else if (paymentMethod === 'mobile_money') {
-            // Using global totalMoneyAmount
+            const totalMoneyAmount = isVendByUnit ? parsedAmount * 1500 : parsedAmount;
             // Initiate PalmKash Mobile Money payment
             const palmKash = (await import('../services/palmKash.service')).default;
             const pmResult = await palmKash.initiatePayment({

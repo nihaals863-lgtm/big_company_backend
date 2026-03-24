@@ -86,26 +86,22 @@ async function callPipingMeterApi(params: { devEui: string, amount?: number, tok
     }
 
     if (!params.token) {
+        // Use lorawanMeter Action for regular GPRS Ordinary topup (GPRS Api token format)
         const rechargePayload = {
-            action: "zlMeter",
-            method: "remotelyTopUp",
-            apiToken: apiToken,
-            param: {
-                nbonetNetImei: params.devEui,
-                topUpAmount: "0",
-                topUpToDeviceAmount: String(params.amount || 0)
+            action: "lorawanMeter",
+            method: "recharge",
+            params: {
+                meterNo: params.devEui,
+                amount: String(params.amount || 0),
+                apiToken: apiToken
             }
         };
-
-        console.log(`[PipingMeter] Initiating remotelyTopUp. IMEI: ${params.devEui}, Volume: ${params.amount}`);
 
         const rechargeResponse = await axios.post(
             `${baseUrl}/api/commonInternal.jsp`,
             `requestParams=${encodeURIComponent(JSON.stringify(rechargePayload))}`,
             { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
         );
-
-        console.log(`[PipingMeter] API Response for ${params.devEui}:`, rechargeResponse.data);
 
         return rechargeResponse.data;
     }
@@ -150,9 +146,9 @@ class PipingMeterService {
                     success: true,
                     meterNumber: params.meterNumber,
                     amount: params.amount,
-                    units: params.amount || 0,
+                    units: this.calculateUnits(params.amount || 0),
                     apiReference: response.value?.id || `PIPING-${Date.now()}`,
-                    message: response.msg || response.errmsg || 'Piping Meter recharge successful',
+                    message: response.msg || response.errmsg || 'Piping Meter top up successful',
                 };
             } else {
                 return {
