@@ -257,43 +257,16 @@ export const initiateGasMeterRecharge = async (req: AuthRequest, res: Response) 
                     isVendByUnit: !!isVendByUnit
                 });
             } else { // PIPING
-                let remoteToken = token;
-
-                // --- Remote Token Generation (Only if amount > 0 and token as not provided manually) ---
-                if (!remoteToken && parsedAmount > 0) {
-                     try {
-                         console.log(`[GasRecharge] Fetching STS Token for Remote Push. Meter: ${meterNumber}, Amt: ${parsedAmount}`);
-                         const tokenResp = await tokenMeterService.rechargeTokenMeter({
-                             meterNumber,
-                             amount: parsedAmount,
-                             customerRef: `${customerRef}-TOKEN`,
-                             isVendByUnit: !!isVendByUnit
-                         });
-
-                         if (tokenResp && tokenResp.success && tokenResp.token) {
-                             remoteToken = tokenResp.token.replace(/\s/g, ''); // Ensure no spaces
-                             console.log(`[GasRecharge] Token Generated for Remote Push: ${remoteToken}`);
-                         } else {
-                             throw new Error(tokenResp.error || 'Failed to generate STS Token for remote push.');
-                         }
-                     } catch (tokenError: any) {
-                         console.error('[GasRecharge] Token Generation error:', tokenError.message);
-                         return res.status(400).json({ success: false, error: 'Could not generate Token from STS provider: ' + tokenError.message });
-                     }
-                }
-
-                // --- Finally Push to Piping Meter ---
+                // FOR PIPING (Energyy Skype): Directly call the piping service. 
+                // Do NOT generate a token from Stronpower here.
                 apiResult = await pipingMeterService.rechargePipingMeter({
                     meterNumber,
                     amount: parsedAmount,
                     customerRef,
-                    token: remoteToken 
+                    token: token // Pass token only if user manually provided it
                 });
 
-                // Attach the generated token to result for user reference
-                if (apiResult.success && remoteToken) {
-                    apiResult.token = remoteToken;
-                }
+                // For piped recharges, the UI should show "Auto-credited"
             }
         }
     } catch (apiError: any) {
