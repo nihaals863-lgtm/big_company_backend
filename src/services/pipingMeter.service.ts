@@ -137,9 +137,11 @@ class PipingMeterService {
 
     async rechargePipingMeter(params: PipingMeterRechargeParams): Promise<PipingMeterRechargeResult> {
         try {
+            const unitsAmount = this.calculateUnits(params.amount || 0);
+
             const apiParams = {
                 devEui: params.meterNumber,
-                amount: params.amount,
+                amount: unitsAmount,
                 token: params.token
             };
 
@@ -150,7 +152,7 @@ class PipingMeterService {
                     success: true,
                     meterNumber: params.meterNumber,
                     amount: params.amount,
-                    units: params.amount || 0,
+                    units: unitsAmount,
                     apiReference: response.value?.id || `PIPING-${Date.now()}`,
                     message: response.msg || response.errmsg || 'Piping Meter recharge successful',
                 };
