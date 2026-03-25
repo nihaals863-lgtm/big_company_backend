@@ -86,55 +86,66 @@ async function callPipingMeterApi(params: { devEui: string, amount?: number, tok
     }
 
     if (!params.token) {
-        // --- ATTEMPT 1: lorawanMeter / recharge (Classic GPRS Logic) ---
-        const payload1 = {
-            action: "lorawanMeter",
-            method: "recharge",
-            params: {
-                meterNo: params.devEui,
-                amount: String(params.amount || 0),
-                apiToken: apiToken
-            }
-        };
+        let respData: any = null;
 
-        console.log(`[PipingMeter] Attempt 1 (lorawanMeter) for ${params.devEui}...`);
-        const resp1 = await axios.post(
-            `${baseUrl}/api/commonInternal.jsp`,
-            `requestParams=${encodeURIComponent(JSON.stringify(payload1))}`,
-            { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
-        );
+        // --- ATTEMPT 1: zlMeter / remotelyTopUp (Newer NB-IoT/IMEI Logic) ---
+        try {
+            console.log(`[PipingMeter] Attempt 1 (zlMeter) for ${params.devEui}...`);
+            const payload1 = {
+                action: "zlMeter",
+                method: "remotelyTopUp",
+                apiToken: apiToken,
+                param: {
+                    nbonetNetImei: params.devEui,
+                    topUpAmount: "0",
+                    topUpToDeviceAmount: String(params.amount || 0)
+                }
+            };
 
-        if (resp1.data?.success || (resp1.data?.errcode !== undefined && resp1.data?.errcode !== 100)) {
-            // If it succeeds OR fails with something other than "not found" (errcode 100 typically means not found)
-            // Or if message doesn't contain "not found"
+            const resp1 = await axios.post(
+                `${baseUrl}/api/commonInternal.jsp`,
+                `requestParams=${encodeURIComponent(JSON.stringify(payload1))}`,
+                { headers: { "Content-Type": "application/x-www-form-urlencoded" }, timeout: 15000 }
+            );
+
+            console.log(`[PipingMeter] Attempt 1 result for ${params.devEui}:`, resp1.data);
+            
             const msg = (resp1.data?.msg || resp1.data?.errmsg || "").toLowerCase();
-            if (!msg.includes("not found")) {
-                console.log(`[PipingMeter] Attempt 1 result for ${params.devEui}:`, resp1.data);
-                return resp1.data;
+            if (resp1.data?.success || (resp1.data?.errcode !== undefined && resp1.data?.errcode !== 100 && !msg.includes("not found"))) {
+                 return resp1.data;
             }
+            respData = resp1.data; // Store to return if attempt 2 also fails
+        } catch (err1: any) {
+            console.error(`[PipingMeter] Attempt 1 failed with HTTP error: ${err1.message}`);
         }
 
-        // --- ATTEMPT 2: zlMeter / remotelyTopUp (Newer NB-IoT/IMEI Logic) ---
-        console.log(`[PipingMeter] Attempt 2 (zlMeter) for ${params.devEui} (Fallback)...`);
-        const payload2 = {
-            action: "zlMeter",
-            method: "remotelyTopUp",
-            apiToken: apiToken,
-            param: {
-                nbonetNetImei: params.devEui,
-                topUpAmount: "0",
-                topUpToDeviceAmount: String(params.amount || 0)
-            }
-        };
+        // --- ATTEMPT 2: lorawanMeter / recharge (Classic GPRS Logic) ---
+        try {
+            console.log(`[PipingMeter] Attempt 2 (lorawanMeter) for ${params.devEui} (Fallback)...`);
+            const payload2 = {
+                action: "lorawanMeter",
+                method: "recharge",
+                params: {
+                    meterNo: params.devEui,
+                    amount: String(params.amount || 0),
+                    apiToken: apiToken
+                }
+            };
 
-        const resp2 = await axios.post(
-            `${baseUrl}/api/commonInternal.jsp`,
-            `requestParams=${encodeURIComponent(JSON.stringify(payload2))}`,
-            { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
-        );
+            const resp2 = await axios.post(
+                `${baseUrl}/api/commonInternal.jsp`,
+                `requestParams=${encodeURIComponent(JSON.stringify(payload2))}`,
+                { headers: { "Content-Type": "application/x-www-form-urlencoded" }, timeout: 15000 }
+            );
 
-        console.log(`[PipingMeter] Attempt 2 result for ${params.devEui}:`, resp2.data);
-        return resp2.data;
+            console.log(`[PipingMeter] Attempt 2 result for ${params.devEui}:`, resp2.data);
+            return resp2.data;
+        } catch (err2: any) {
+            console.error(`[PipingMeter] Attempt 2 failed with HTTP error: ${err2.message}`);
+            // If attempt 1 returned a specialized body error (like "meter not found") but attempt 2 gave a 404, return the attempt 1 body.
+            if (respData) return respData;
+            throw err2;
+        }
     }
 
     // Token Push Mode requires 'zlMeter' and 'rechargeToken'
