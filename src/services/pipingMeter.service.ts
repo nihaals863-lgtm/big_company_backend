@@ -86,7 +86,37 @@ async function callPipingMeterApi(params: { devEui: string, amount?: number, tok
     }
 
     if (!params.token) {
-        const rechargePayload = {
+        // --- ATTEMPT 1: lorawanMeter / recharge (Classic GPRS Logic) ---
+        const payload1 = {
+            action: "lorawanMeter",
+            method: "recharge",
+            params: {
+                meterNo: params.devEui,
+                amount: String(params.amount || 0),
+                apiToken: apiToken
+            }
+        };
+
+        console.log(`[PipingMeter] Attempt 1 (lorawanMeter) for ${params.devEui}...`);
+        const resp1 = await axios.post(
+            `${baseUrl}/api/commonInternal.jsp`,
+            `requestParams=${encodeURIComponent(JSON.stringify(payload1))}`,
+            { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
+        );
+
+        if (resp1.data?.success || (resp1.data?.errcode !== undefined && resp1.data?.errcode !== 100)) {
+            // If it succeeds OR fails with something other than "not found" (errcode 100 typically means not found)
+            // Or if message doesn't contain "not found"
+            const msg = (resp1.data?.msg || resp1.data?.errmsg || "").toLowerCase();
+            if (!msg.includes("not found")) {
+                console.log(`[PipingMeter] Attempt 1 result for ${params.devEui}:`, resp1.data);
+                return resp1.data;
+            }
+        }
+
+        // --- ATTEMPT 2: zlMeter / remotelyTopUp (Newer NB-IoT/IMEI Logic) ---
+        console.log(`[PipingMeter] Attempt 2 (zlMeter) for ${params.devEui} (Fallback)...`);
+        const payload2 = {
             action: "zlMeter",
             method: "remotelyTopUp",
             apiToken: apiToken,
@@ -97,17 +127,14 @@ async function callPipingMeterApi(params: { devEui: string, amount?: number, tok
             }
         };
 
-        console.log(`[PipingMeter] Initiating remotelyTopUp. IMEI: ${params.devEui}, Volume: ${params.amount}`);
-
-        const rechargeResponse = await axios.post(
+        const resp2 = await axios.post(
             `${baseUrl}/api/commonInternal.jsp`,
-            `requestParams=${encodeURIComponent(JSON.stringify(rechargePayload))}`,
+            `requestParams=${encodeURIComponent(JSON.stringify(payload2))}`,
             { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
         );
 
-        console.log(`[PipingMeter] API Response for ${params.devEui}:`, rechargeResponse.data);
-
-        return rechargeResponse.data;
+        console.log(`[PipingMeter] Attempt 2 result for ${params.devEui}:`, resp2.data);
+        return resp2.data;
     }
 
     // Token Push Mode requires 'zlMeter' and 'rechargeToken'
@@ -163,10 +190,10 @@ class PipingMeterService {
                 };
             }
         } catch (error: any) {
-             return {
-                 success: false,
-                 error: error.message || 'Piping API call failed'
-             };
+            return {
+                success: false,
+                error: error.message || 'Piping API call failed'
+            };
         }
     }
 
