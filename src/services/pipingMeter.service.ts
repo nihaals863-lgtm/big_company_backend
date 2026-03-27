@@ -88,16 +88,16 @@ async function callPipingMeterApi(params: { devEui: string, amount?: number, tok
     if (!params.token) {
         let respData: any = null;
 
-        // --- ATTEMPT 1: zlMeter / remotelyTopUp (Newer NB-IoT/IMEI Logic) ---
+        // --- ATTEMPT 1: zlMeter / remotelyTopUp (Verified System Logic) ---
         try {
-            console.log(`[PipingMeter] Attempt 1 (zlMeter) for ${params.devEui}...`);
+            console.log(`[PipingMeter] Attempt 1 (remotelyTopUp) for ${params.devEui}...`);
             const payload1 = {
-                action: "zlMeter",
+                action: "lorawanMeter",
                 method: "remotelyTopUp",
                 apiToken: apiToken,
                 param: {
-                    nbonetNetImei: params.devEui,
-                    topUpAmount: "0",
+                    deveui: params.devEui,
+                    topUpAmount: String(params.amount || 0),
                     topUpToDeviceAmount: String(params.amount || 0)
                 }
             };
@@ -111,17 +111,17 @@ async function callPipingMeterApi(params: { devEui: string, amount?: number, tok
             console.log(`[PipingMeter] Attempt 1 result for ${params.devEui}:`, resp1.data);
             
             const msg = (resp1.data?.msg || resp1.data?.errmsg || "").toLowerCase();
-            if (resp1.data?.success || (resp1.data?.errcode !== undefined && resp1.data?.errcode !== 100 && !msg.includes("not found"))) {
+            if (resp1.data?.errcode === "0" || resp1.data?.errcode === 0 || (!msg.includes("not found") && resp1.data?.success)) {
                  return resp1.data;
             }
-            respData = resp1.data; // Store to return if attempt 2 also fails
+            respData = resp1.data; 
         } catch (err1: any) {
             console.error(`[PipingMeter] Attempt 1 failed with HTTP error: ${err1.message}`);
         }
 
-        // --- ATTEMPT 2: lorawanMeter / recharge (Classic GPRS Logic) ---
+        // --- ATTEMPT 2: lorawanMeter / recharge (Classic GPRS Fallback) ---
         try {
-            console.log(`[PipingMeter] Attempt 2 (lorawanMeter) for ${params.devEui} (Fallback)...`);
+            console.log(`[PipingMeter] Attempt 2 (recharge) for ${params.devEui} (Fallback)...`);
             const payload2 = {
                 action: "lorawanMeter",
                 method: "recharge",
@@ -142,7 +142,6 @@ async function callPipingMeterApi(params: { devEui: string, amount?: number, tok
             return resp2.data;
         } catch (err2: any) {
             console.error(`[PipingMeter] Attempt 2 failed with HTTP error: ${err2.message}`);
-            // If attempt 1 returned a specialized body error (like "meter not found") but attempt 2 gave a 404, return the attempt 1 body.
             if (respData) return respData;
             throw err2;
         }
