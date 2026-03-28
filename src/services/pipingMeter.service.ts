@@ -96,7 +96,7 @@ async function callPipingMeterApi(params: { devEui: string, amount?: number, tok
                 method: "remotelyTopUp",
                 apiToken: apiToken,
                 param: {
-                    deveui: params.devEui,
+                    devEui: params.devEui,
                     topUpAmount: String(params.amount || 0),
                     topUpToDeviceAmount: String(params.amount || 0)
                 }
