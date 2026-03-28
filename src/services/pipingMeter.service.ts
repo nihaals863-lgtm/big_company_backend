@@ -126,7 +126,7 @@ async function callPipingMeterApi(params: { devEui: string, amount?: number, tok
                 action: "lorawanMeter",
                 method: "recharge",
                 params: {
-                    meterNo: params.devEui,
+                    devEui: params.devEui,
                     amount: String(params.amount || 0),
                     apiToken: apiToken
                 }
