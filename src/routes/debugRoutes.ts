@@ -91,4 +91,66 @@ router.get('/', async (req, res) => {
   }
 });
 
+// === GPRS METER DIAGNOSTIC TEST ===
+router.get('/gprs-test', async (req, res) => {
+  const imei = (req.query.imei as string) || '865395070835713';
+  const baseUrl = process.env.LORAWAN_BASE_URL || 'http://english.energyy.ucskype.com';
+  const username = process.env.LORAWAN_USERNAME || 'Rwanda_Kayitare';
+  const password = process.env.LORAWAN_PASSWORD || '123456';
+
+  const results: any = { imei, baseUrl, tests: [] };
+
+  try {
+    const axios = (await import('axios')).default;
+
+    // Step 1: Login
+    const loginPayload = { action: "lorawanMeter", method: "toLogin", params: { username, password } };
+    const loginResp = await axios.post(
+      `${baseUrl}/api/commonInternal.jsp`,
+      `requestParams=${encodeURIComponent(JSON.stringify(loginPayload))}`,
+      { headers: { "Content-Type": "application/x-www-form-urlencoded" }, timeout: 10000 }
+    );
+    const apiToken = loginResp.data?.value?.apiToken;
+    results.login = { success: !!apiToken, apiToken: apiToken ? `${apiToken.substring(0,8)}...` : null, fullResponse: loginResp.data };
+
+    if (!apiToken) {
+      return res.json({ ...results, error: 'Login failed' });
+    }
+
+    // Test all combinations
+    const testCases = [
+      { name: 'zlMeter+remotelyTopUp+imei',    action: 'zlMeter',     method: 'remotelyTopUp',  paramKey: 'imei',   extraParams: { topUpAmount: '1', topUpToDeviceAmount: '1' } },
+      { name: 'zlMeter+remotelyTopUp+devEui',  action: 'zlMeter',     method: 'remotelyTopUp',  paramKey: 'devEui', extraParams: { topUpAmount: '1', topUpToDeviceAmount: '1' } },
+      { name: 'lorawanMeter+remotelyTopUp+imei',action:'lorawanMeter', method: 'remotelyTopUp',  paramKey: 'imei',   extraParams: { topUpAmount: '1', topUpToDeviceAmount: '1' } },
+      { name: 'lorawanMeter+remotelyTopUp+devEui',action:'lorawanMeter',method:'remotelyTopUp', paramKey: 'devEui', extraParams: { topUpAmount: '1', topUpToDeviceAmount: '1' } },
+      { name: 'zlMeter+queryMeterInfo+imei',   action: 'zlMeter',     method: 'queryMeterInfo', paramKey: 'imei',   extraParams: {} },
+      { name: 'lorawanMeter+queryMeterInfo+imei',action:'lorawanMeter',method:'queryMeterInfo', paramKey: 'imei',   extraParams: {} },
+      { name: 'lorawanMeter+queryMeterInfo+devEui',action:'lorawanMeter',method:'queryMeterInfo',paramKey:'devEui', extraParams: {} },
+    ];
+
+    for (const tc of testCases) {
+      try {
+        const payload: any = {
+          action: tc.action,
+          method: tc.method,
+          apiToken,
+          param: { [tc.paramKey]: imei, ...tc.extraParams }
+        };
+        const resp = await axios.post(
+          `${baseUrl}/api/commonInternal.jsp`,
+          `requestParams=${encodeURIComponent(JSON.stringify(payload))}`,
+          { headers: { "Content-Type": "application/x-www-form-urlencoded" }, timeout: 10000 }
+        );
+        results.tests.push({ name: tc.name, payload: payload.param, response: resp.data });
+      } catch (e: any) {
+        results.tests.push({ name: tc.name, error: e.message });
+      }
+    }
+
+    return res.json(results);
+  } catch (e: any) {
+    return res.json({ ...results, error: e.message });
+  }
+});
+
 export default router;

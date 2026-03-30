@@ -48,9 +48,9 @@ import {
   getGasRewardsBalance,
   getGasRewardsHistory,
   getGasRewardsLeaderboard,
-  getCustomerOrders,
   getOrderDetails,
-  recordGasUsage
+  recordGasUsage,
+  lookupMeter
 } from '../controllers/gasController';
 import { authenticate, optionalAuthenticate } from '../middleware/authMiddleware';
 
@@ -81,6 +81,7 @@ router.get('/wallets/transactions', authenticate, getWalletTransactions);
 
 // Protected routes - Gas Service
 router.get('/gas/meters', authenticate, getGasMeters);
+router.get('/gas/meters/lookup/:meter_number', lookupMeter);
 router.post('/gas/meters', authenticate, addGasMeter);
 router.delete('/gas/meters/:id', authenticate, removeGasMeter);
 router.post('/gas/topup', authenticate, topupGas);

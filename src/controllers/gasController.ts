@@ -1,6 +1,61 @@
 import { Response } from 'express';
 import { AuthRequest } from '../middleware/authMiddleware';
 import prisma from '../utils/prisma';
+import PipingMeterService from '../services/pipingMeter.service';
+
+// Lookup meter info (auto-fill)
+export const lookupMeter = async (req: AuthRequest, res: Response) => {
+    try {
+        const { meter_number } = req.params;
+        console.log(`[LOOKUP] Searching for meter: ${meter_number}`);
+
+        if (!meter_number) {
+            return res.status(400).json({ success: false, error: 'Meter number is required' });
+        }
+
+        // 1. Check local DB first (maybe it was registered before or exists in system)
+        const localMeter = await prisma.gasMeter.findFirst({
+            where: { meterNumber: meter_number },
+            orderBy: { createdAt: 'desc' }
+        });
+
+        if (localMeter) {
+            return res.json({
+                success: true,
+                source: 'local',
+                data: {
+                    owner_name: localMeter.ownerName,
+                    owner_phone: localMeter.ownerPhone,
+                    meter_type: (localMeter as any).meterType || 'PIPING'
+                }
+            });
+        }
+
+        // 2. If not local and looks like an IMEI (15 digits), try Energyy API
+        if (meter_number.length >= 14 && /^\d+$/.test(meter_number)) {
+            const remoteInfo = await PipingMeterService.getMeterInfo(meter_number);
+            
+            if (remoteInfo && (remoteInfo.errcode === 0 || remoteInfo.errcode === "0") && remoteInfo.value) {
+                // Energyy API usually returns owner info in 'value' object
+                // Note: Actual field names depend on Energyy API response
+                return res.json({
+                    success: true,
+                    source: 'remote',
+                    data: {
+                        owner_name: remoteInfo.value.customerName || remoteInfo.value.ownerName || '',
+                        owner_phone: remoteInfo.value.phone || remoteInfo.value.ownerPhone || '',
+                        meter_type: 'PIPING'
+                    }
+                });
+            }
+        }
+
+        res.status(404).json({ success: false, error: 'Meter information not found' });
+    } catch (error: any) {
+        console.error('Lookup meter error:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+};
 
 // Get gas meters
 export const getGasMeters = async (req: AuthRequest, res: Response) => {
@@ -42,6 +97,8 @@ export const getGasMeters = async (req: AuthRequest, res: Response) => {
                 return {
                     id: m.id,
                     meter_number: m.meterNumber,
+                    meter_key: (m as any).meterKey,
+                    serial_no: (m as any).serialNo,
                     alias_name: m.aliasName,
                     owner_name: m.ownerName,
                     owner_phone: m.ownerPhone,
@@ -62,7 +119,7 @@ export const getGasMeters = async (req: AuthRequest, res: Response) => {
 export const addGasMeter = async (req: AuthRequest, res: Response) => {
     try {
         const userId = req.user!.id;
-        const { meter_number, alias_name, owner_name, owner_phone, meter_type } = req.body;
+        const { meter_number, alias_name, owner_name, owner_phone, meter_type, meter_key, serial_no } = req.body;
 
         if (!meter_number) {
             return res.status(400).json({ success: false, error: 'Meter number is required' });
@@ -89,6 +146,9 @@ export const addGasMeter = async (req: AuthRequest, res: Response) => {
             data: {
                 consumerId: consumerProfile.id,
                 meterNumber: meter_number,
+                meterKey: meter_key,
+                serialNo: serial_no,
+                meterType: meter_type === 'PIPING' || meter_type === 'GPRS' ? 'PIPING' : 'TOKEN',
                 aliasName: alias_name || 'My Meter',
                 ownerName: owner_name,
                 ownerPhone: owner_phone,
@@ -101,6 +161,8 @@ export const addGasMeter = async (req: AuthRequest, res: Response) => {
             data: {
                 id: meter.id,
                 meter_number: meter.meterNumber,
+                meter_key: (meter as any).meterKey,
+                serial_no: (meter as any).serialNo,
                 alias_name: meter.aliasName,
                 owner_name: meter.ownerName,
                 owner_phone: meter.ownerPhone,

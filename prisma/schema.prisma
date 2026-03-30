@@ -469,6 +469,9 @@ model GasMeter {
   id              Int             @id @default(autoincrement())
   consumerId      Int
   meterNumber     String          @unique(map: "GasMeter_meterNumber_key")
+  meterKey        String?         // METER_KEY (16-char hex devEui) used by Energyy GPRS API
+  serialNo        String?         // Serial number from meter documentation
+  meterType       String?         @default("PIPING") // 'TOKEN' or 'PIPING'
   aliasName       String?
   ownerName       String?
   ownerPhone      String?
