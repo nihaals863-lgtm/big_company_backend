@@ -242,7 +242,9 @@ export const initiateGasMeterRecharge = async (req: AuthRequest, res: Response) 
     let apiResult: any;
 
     try {
-        if (selectedProvider === 'zhongyi') {
+        // PRIORITIZE ZHONGYI FOR PIPING (as requested for reliability) OR IF EXPLICITLY SELECTED
+        if (selectedProvider === 'zhongyi' || meterType === 'PIPING') {
+            console.log(`[GasRecharge] Routing ${meterType} recharge via Zhongyi API (AppID: 19)`);
             apiResult = await zhongyiMeterService.rechargeMeter({
                 meterNumber,
                 amount: parsedAmount,
@@ -256,17 +258,14 @@ export const initiateGasMeterRecharge = async (req: AuthRequest, res: Response) 
                     customerRef,
                     isVendByUnit: !!isVendByUnit
                 });
-            } else { // PIPING
-                // FOR PIPING (Energyy Skype): Directly call the piping service. 
-                // Do NOT generate a token from Stronpower here.
+            } else { 
+                // Legacy / Stronpower Piping path (if needed later)
                 apiResult = await pipingMeterService.rechargePipingMeter({
                     meterNumber,
                     amount: parsedAmount,
                     customerRef,
-                    token: token // Pass token only if user manually provided it
+                    token: token 
                 });
-
-                // For piped recharges, the UI should show "Auto-credited"
             }
         }
     } catch (apiError: any) {
