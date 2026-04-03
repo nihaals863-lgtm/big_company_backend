@@ -242,31 +242,25 @@ export const initiateGasMeterRecharge = async (req: AuthRequest, res: Response) 
     let apiResult: any;
 
     try {
-        // PRIORITIZE ZHONGYI FOR PIPING (as requested for reliability) OR IF EXPLICITLY SELECTED
-        if (selectedProvider === 'zhongyi' || meterType === 'PIPING') {
-            console.log(`[GasRecharge] Routing ${meterType} recharge via Zhongyi API (AppID: 19)`);
+        if (selectedProvider === 'zhongyi') {
+            console.log(`[GasRecharge] Routing ${meterType} recharge via Zhongyi API`);
             apiResult = await zhongyiMeterService.rechargeMeter({
                 meterNumber,
                 amount: parsedAmount,
                 customerRef,
             });
         } else {
-            if (meterType === 'TOKEN') {
-                apiResult = await tokenMeterService.rechargeTokenMeter({
-                    meterNumber,
-                    amount: parsedAmount,
-                    customerRef,
-                    isVendByUnit: !!isVendByUnit
-                });
-            } else { 
-                // Legacy / Stronpower Piping path (if needed later)
-                apiResult = await pipingMeterService.rechargePipingMeter({
-                    meterNumber,
-                    amount: parsedAmount,
-                    customerRef,
-                    token: token 
-                });
-            }
+            // Apply Stronpower API (tokenMeterService) for both TOKEN and PIPING/LoRa meters
+            console.log(`[GasRecharge] Routing ${meterType} recharge via Stronpower API (TokenMeterService)`);
+            apiResult = await tokenMeterService.rechargeTokenMeter({
+                meterNumber,
+                amount: parsedAmount,
+                customerRef,
+                isVendByUnit: !!isVendByUnit
+            });
+            
+            // Note: Stronpower's tokenMeterService automatically handles Token generation, 
+            // and falls back to VendingMeterDirectly (Direct TopUp) if the meter requires it.
         }
     } catch (apiError: any) {
         await prisma.gasRechargeTransaction.update({
