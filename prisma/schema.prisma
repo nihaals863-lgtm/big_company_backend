@@ -470,6 +470,8 @@ model GasMeter {
   consumerId      Int
   meterNumber     String          @unique(map: "GasMeter_meterNumber_key")
   meterKey        String?         // METER_KEY (16-char hex devEui) used by Energyy GPRS API
+  imei            String?         // Store the mapping to IMEI for GPRS remote push
+  isGprs          Boolean         @default(false)
   serialNo        String?         // Serial number from meter documentation
   meterType       String?         @default("PIPING") // 'TOKEN' or 'PIPING'
   aliasName       String?

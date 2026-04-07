@@ -157,7 +157,7 @@ async function callPipingMeterApi(params: { devEui: string, amount?: number, tok
             );
 
             console.log(`[PipingMeter] Attempt 1 RAW response:`, JSON.stringify(resp1.data));
-            
+
             // Log to persistent file for troubleshooting
             try {
                 const fs = require('fs');
@@ -165,7 +165,7 @@ async function callPipingMeterApi(params: { devEui: string, amount?: number, tok
                 const os = require('os');
                 const logMsg = `[PIPING-DEBUG] Attempt 1 Response: ${JSON.stringify(resp1.data)}\n`;
                 fs.appendFileSync(path.join(os.tmpdir(), 'backend_output.log'), logMsg);
-            } catch (e) {}
+            } catch (e) { }
 
             const msg1 = (resp1.data?.msg || resp1.data?.errmsg || resp1.data?.message || "").toLowerCase();
             if (resp1.data?.errcode === "0" || resp1.data?.errcode === 0) {
@@ -216,7 +216,7 @@ async function callPipingMeterApi(params: { devEui: string, amount?: number, tok
                 const os = require('os');
                 const logMsg = `[PIPING-DEBUG] Attempt 2 Response: ${JSON.stringify(resp2.data)}\n`;
                 fs.appendFileSync(path.join(os.tmpdir(), 'backend_output.log'), logMsg);
-            } catch (e) {}
+            } catch (e) { }
 
             const msg2 = (resp2.data?.msg || resp2.data?.errmsg || "").toLowerCase();
             if (resp2.data?.errcode === "0" || resp2.data?.errcode === 0) {
@@ -303,14 +303,6 @@ class PipingMeterService {
             const unitsAmount = this.calculateUnits(params.amount || 0);
 
             // Fetch the correct identifier from DB
-            // Client uses IMEI to input, but API often needs the 16-char hex 'METER_KEY'
-            // Fetch the correct identifier from DB (if any)
-            const meterRecord = await prisma.gasMeter.findUnique({
-                where: { meterNumber: params.meterNumber }
-            });
-
-            // For Energyy Skype GPRS (zlMeter), IMEI is the primary ID
-            // RAW API Test confirmed it needs BOTH 'imei' and 'nbonetNetImei' fields
             const apiIdentifier = params.meterNumber;
 
             const apiParams = {
@@ -340,6 +332,41 @@ class PipingMeterService {
             return {
                 success: false,
                 error: error.message || 'Piping API call failed'
+            };
+        }
+    }
+
+    /**
+     * Specifically pushes a generated STS token to a GPRS meter via its IMEI.
+     */
+    async pushTokenToImei(imei: string, token: string): Promise<PipingMeterRechargeResult> {
+        try {
+            console.log(`[PipingMeter] Pushing remote token to IMEI: ${imei}`);
+
+            const apiParams = {
+                devEui: imei,
+                token: token
+            };
+
+            const response = await callPipingMeterApi(apiParams);
+
+            if (response && (response.success || response.errcode === "0" || response.errcode === 0)) {
+                return {
+                    success: true,
+                    meterNumber: imei,
+                    message: response.msg || 'Token pushed successfully to GPRS meter',
+                    apiReference: response.value?.id || `PUSH-${Date.now()}`
+                };
+            } else {
+                return {
+                    success: false,
+                    error: response.msg || response.errmsg || 'Remote push rejected by GPRS management system',
+                };
+            }
+        } catch (error: any) {
+            return {
+                success: false,
+                error: error.message || 'Remote push failed'
             };
         }
     }

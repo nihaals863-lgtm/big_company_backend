@@ -298,6 +298,20 @@ export const initiateGasMeterRecharge = async (req: AuthRequest, res: Response) 
             });
 
             if (meter) {
+                // --- AUTOMATIC GPRS PUSH INTEGRATION ---
+                // If the meter has a mapped IMEI, push the generated STS token remotely
+                if (meter.imei && apiResult.token) {
+                    console.log(`[GasRecharge] Meter ${meterNumber} has IMEI ${meter.imei}. Triggering remote token push...`);
+                    const pushResult = await pipingMeterService.pushTokenToImei(meter.imei, apiResult.token);
+                    
+                    if (pushResult.success) {
+                        apiResult.message = (apiResult.message || 'Recharge successful') + ' (Pushed to Meter)';
+                    } else {
+                        apiResult.message = (apiResult.message || 'Recharge successful') + ' (Remote push failed, manual entry required)';
+                        console.warn(`[GasRecharge] Remote push failed for meter ${meterNumber}: ${pushResult.error}`);
+                    }
+                }
+
                 if (consumerProfileId) {
                     await prisma.gasTopup.create({
                         data: {
