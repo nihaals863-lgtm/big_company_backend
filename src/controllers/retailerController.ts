@@ -520,7 +520,14 @@ export const getOrders = async (req: AuthRequest, res: Response) => {
       notes: '',
       created_at: sale.createdAt.toISOString(),
       updated_at: sale.updatedAt.toISOString(),
-      completed_at: sale.status === 'completed' ? sale.updatedAt.toISOString() : undefined
+      completed_at: sale.status === 'completed' ? sale.updatedAt.toISOString() : undefined,
+      shipper: sale.shipperName ? {
+        name: sale.shipperName,
+        phone: sale.shipperPhone,
+        plate_number: sale.vehiclePlate
+      } : undefined,
+      rejection_reason: sale.rejectionReason,
+      cancellation_reason: sale.cancellationReason
     }));
 
 
@@ -584,7 +591,14 @@ export const getOrder = async (req: AuthRequest, res: Response) => {
       notes: '',
       created_at: sale.createdAt.toISOString(),
       updated_at: sale.updatedAt.toISOString(),
-      completed_at: sale.status === 'completed' ? sale.updatedAt.toISOString() : undefined
+      completed_at: sale.status === 'completed' ? sale.updatedAt.toISOString() : undefined,
+      shipper: sale.shipperName ? {
+        name: sale.shipperName,
+        phone: sale.shipperPhone,
+        plate_number: sale.vehiclePlate
+      } : undefined,
+      rejection_reason: sale.rejectionReason,
+      cancellation_reason: sale.cancellationReason
     };
 
     res.json({ order: formattedOrder });
@@ -960,7 +974,7 @@ export const createSale = async (req: AuthRequest, res: Response) => {
 export const updateSaleStatus = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
-    let { status, notes } = req.body;
+    let { status, notes, shipper_name, shipper_phone, vehicle_plate, reason } = req.body;
 
     const retailerProfile = await prisma.retailerProfile.findUnique({
       where: { userId: req.user!.id }
@@ -978,11 +992,12 @@ export const updateSaleStatus = async (req: AuthRequest, res: Response) => {
     // Map frontend status names to backend: processing = confirmed
     if (status === 'processing') status = 'confirmed';
 
-    // State machine: pending -> confirmed/processing -> ready -> completed / cancelled
+    // State machine: pending -> confirmed/processing -> shipped -> ready -> completed / delivered
     const validTransitions: Record<string, string[]> = {
       'pending': ['confirmed', 'processing', 'cancelled'],
-      'confirmed': ['ready', 'cancelled'],
-      'processing': ['ready', 'cancelled'],
+      'confirmed': ['shipped', 'ready', 'cancelled'],
+      'processing': ['shipped', 'ready', 'cancelled'],
+      'shipped': ['ready', 'delivered', 'completed'],
       'ready': ['completed', 'delivered'],
       'completed': [],
       'delivered': [],
@@ -995,9 +1010,19 @@ export const updateSaleStatus = async (req: AuthRequest, res: Response) => {
       });
     }
 
+    const updateData: any = { status };
+    if (status === 'shipped') {
+      updateData.shipperName = shipper_name;
+      updateData.shipperPhone = shipper_phone;
+      updateData.vehiclePlate = vehicle_plate;
+    }
+    if (status === 'cancelled' && reason) {
+      updateData.rejectionReason = reason;
+    }
+
     const sale = await prisma.sale.update({
       where: { id: Number(id) },
-      data: { status }
+      data: updateData
     });
 
     res.json({ success: true, sale });
@@ -1035,8 +1060,8 @@ export const cancelSale = async (req: AuthRequest, res: Response) => {
     const sale = await prisma.sale.update({
       where: { id: Number(id) },
       data: {
-        status: 'cancelled'
-        // Could add cancelReason field if exists in schema
+        status: 'cancelled',
+        rejectionReason: reason
       }
     });
 

@@ -630,10 +630,16 @@ export const getMyOrders = async (req: AuthRequest, res: Response) => {
       created_at: sale.createdAt.toISOString(),
       updated_at: sale.updatedAt.toISOString(),
       payment_method: sale.paymentMethod,
-      // Optional fields defaulting to null/undefined
+      // Optional fields
       packager: undefined,
-      shipper: undefined,
-      meter_id: undefined
+      shipper: sale.shipperName ? {
+        name: sale.shipperName,
+        phone: sale.shipperPhone,
+        plate_number: sale.vehiclePlate
+      } : undefined,
+      meter_id: sale.meterId,
+      rejection_reason: sale.rejectionReason,
+      cancellation_reason: sale.cancellationReason
     }));
 
     // 4. Normalize CustomerOrders (Gas/Service)
@@ -677,7 +683,14 @@ export const getMyOrders = async (req: AuthRequest, res: Response) => {
         created_at: order.createdAt.toISOString(),
         updated_at: order.updatedAt.toISOString(),
         payment_method: metadata.paymentMethod || 'Wallet',
-        meter_id: items[0]?.meterNumber // Attempt to grab meter number
+        meter_id: items[0]?.meterNumber, // Attempt to grab meter number
+        rejection_reason: order.rejectionReason,
+        cancellation_reason: order.cancellationReason,
+        shipper: order.shipperName ? {
+          name: order.shipperName,
+          phone: order.shipperPhone,
+          plate_number: order.vehiclePlate
+        } : undefined
       };
     });
 
@@ -711,7 +724,10 @@ export const cancelOrder = async (req: AuthRequest, res: Response) => {
 
       await prisma.sale.update({
         where: { id: Number(id) },
-        data: { status: 'cancelled' } // In real world, would add reason to a notes field
+        data: { 
+          status: 'cancelled',
+          cancellationReason: reason
+        }
       });
       return res.json({ success: true, message: 'Order cancelled' });
     }
@@ -725,7 +741,10 @@ export const cancelOrder = async (req: AuthRequest, res: Response) => {
       }
       await prisma.customerOrder.update({
         where: { id: Number(id) },
-        data: { status: 'cancelled' }
+        data: { 
+          status: 'cancelled',
+          cancellationReason: reason
+        }
       });
       return res.json({ success: true, message: 'Order cancelled' });
     }
@@ -740,15 +759,24 @@ export const confirmDelivery = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
     const userId = req.user!.id;
-
-    const consumerProfile = await prisma.consumerProfile.findUnique({ where: { userId } });
-    if (!consumerProfile) return res.status(404).json({ error: 'Profile not found' });
+    const userRole = req.user!.role;
 
     // Only Sales typically have delivery
     const sale = await prisma.sale.findUnique({ where: { id: Number(id) } });
     if (!sale) return res.status(404).json({ error: 'Order not found' });
 
-    if (sale.consumerId !== consumerProfile.id) return res.status(403).json({ error: 'Unauthorized' });
+    // Authorization: User must be the owner OR an admin
+    if (userRole !== 'admin') {
+      const consumerProfile = await prisma.consumerProfile.findUnique({ where: { userId } });
+      if (!consumerProfile || sale.consumerId !== consumerProfile.id) {
+        return res.status(403).json({ error: 'Unauthorized' });
+      }
+    }
+
+    // Status check: Can only confirm if it was ready or shipped
+    if (!['ready', 'shipped', 'confirmed', 'processing'].includes(sale.status)) {
+      return res.status(400).json({ error: `Cannot confirm delivery for order in ${sale.status} status` });
+    }
 
     await prisma.sale.update({
       where: { id: Number(id) },

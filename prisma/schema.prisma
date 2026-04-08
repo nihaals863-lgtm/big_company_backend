@@ -202,6 +202,13 @@ model Sale {
   gasRewards      GasReward[]
   meterId         String?
 
+  // NEW TRACKING FIELDS
+  shipperName     String?
+  shipperPhone    String?
+  vehiclePlate    String?
+  rejectionReason String?
+  cancellationReason String?
+
   @@index([branchId], map: "Sale_branchId_fkey")
   @@index([consumerId], map: "Sale_consumerId_fkey")
   @@index([retailerId], map: "Sale_retailerId_fkey")
@@ -437,6 +444,13 @@ model CustomerOrder {
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @default(now()) @updatedAt
   consumerProfile ConsumerProfile @relation(fields: [consumerId], references: [id], onDelete: NoAction, map: "CustomerOrder_consumerId_fkey")
+
+  // NEW TRACKING FIELDS
+  shipperName     String?
+  shipperPhone    String?
+  vehiclePlate    String?
+  rejectionReason String?
+  cancellationReason String?
 
   @@index([consumerId], map: "CustomerOrder_consumerId_fkey")
   @@map("customerorder")
