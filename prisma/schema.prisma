@@ -147,6 +147,13 @@ model Order {
   orderItems        OrderItem[]
   profitInvoice     ProfitInvoice?
 
+  // NEW TRACKING FIELDS
+  shipperName       String?
+  shipperPhone      String?
+  vehiclePlate      String?
+  rejectionReason   String?
+  cancellationReason String?
+
   @@index([retailerId], map: "Order_retailerId_fkey")
   @@index([wholesalerId], map: "Order_wholesalerId_fkey")
   @@map("order")

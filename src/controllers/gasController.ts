@@ -245,9 +245,9 @@ export const topupGas = async (req: AuthRequest, res: Response) => {
             return res.status(404).json({ success: false, error: 'Gas meter not found' });
         }
 
-        // Calculate units based on realistic market rate (1,500 RWF = 1 kg)
-        // 1 RWF ≈ 0.00067 kg
-        const units = amount / 1500;
+        // Calculate units based on system-wide standard rate
+        const gasPrice = Number(process.env.GAS_PRICE_PER_M3) || 1500;
+        const units = amount / gasPrice;
 
         const result = await prisma.$transaction(async (tx) => {
             // Create topup record
@@ -569,13 +569,16 @@ export const getGasRewardsBalance = async (req: AuthRequest, res: Response) => {
             where: { consumerId: consumerProfile.id }
         });
 
+        console.log(`DEBUG: Found ${rewards.length} rewards for customer ${consumerProfile.id}`);
+
         const totalUnits = rewards.reduce((sum, r) => sum + r.units, 0);
 
         res.json({
             success: true,
             data: {
                 total_units: totalUnits,
-                currency: 'm3',
+                points: Math.round(totalUnits * 100), // Standard: 1 m3 = 100 points
+                currency: 'm³',
                 tier: totalUnits > 100 ? 'Gold' : totalUnits > 50 ? 'Silver' : 'Bronze'
             }
         });
@@ -599,21 +602,32 @@ export const getGasRewardsHistory = async (req: AuthRequest, res: Response) => {
             return res.status(404).json({ success: false, error: 'Customer profile not found' });
         }
 
+        console.log(`DEBUG: Fetching history for userId ${userId}, Profile ${consumerProfile.id}`);
+
         const rewards = await prisma.gasReward.findMany({
             where: { consumerId: consumerProfile.id },
             orderBy: { createdAt: 'desc' },
             take: Number(limit)
         });
 
+        console.log(`DEBUG: Found ${rewards.length} history records`);
+
         res.json({
             success: true,
-            data: rewards.map(r => ({
-                id: r.id,
-                units: r.units,
-                source: r.source,
-                reference: r.reference,
-                created_at: r.createdAt
-            }))
+            data: {
+                transactions: rewards.map(r => ({
+                    id: r.id,
+                    type: r.source,
+                    points: r.units * 100, // 1 m3 = 100 points
+                    description: r.source === 'purchase_reward' ? `Purchase Bonus (${r.units} m³)` :
+                        r.source === 'sent' ? `Sent ${Math.abs(r.units)} m³ to Meter ${r.meterId || ''}` :
+                        r.source === 'purchase' ? `Earned from purchase (${r.units} m³)` :
+                        `Gas Reward (${r.units} m³)`,
+                    created_at: r.createdAt,
+                    meter_id: r.meterId,
+                    order_id: r.reference
+                }))
+            }
         });
     } catch (error: any) {
         console.error('Get gas rewards history error:', error);

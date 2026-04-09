@@ -1,6 +1,9 @@
 import { Response } from 'express';
 import { AuthRequest } from '../middleware/authMiddleware';
 import prisma from '../utils/prisma';
+import tokenMeterService from '../services/tokenMeter.service';
+import zhongyiMeterService from '../services/zhongyiMeter.service';
+import pipingMeterService from '../services/pipingMeter.service';
 
 // Get rewards balance (general rewards, not gas rewards)
 export const getRewardsBalance = async (req: AuthRequest, res: Response) => {
@@ -49,24 +52,29 @@ export const getRewardsHistory = async (req: AuthRequest, res: Response) => {
         // Get gas rewards as transactions
         const gasRewards = await prisma.gasReward.findMany({
             where: { consumerId: consumerProfile.id },
+            include: { sale: true },
             orderBy: { createdAt: 'desc' },
             take: Number(limit)
         });
+
+        console.log(`[REWARDS] Found ${gasRewards.length} transactions for consumer ${consumerProfile.id}`);
 
         // Convert gas rewards to transaction format
         const transactions = gasRewards.map(r => ({
             id: r.id,
             type: r.source,
             points: r.units * 100, // Convert m3 to points
-            description: r.source === 'purchase' ? 'Shopping rewards' :
-                r.source === 'bonus' ? 'Welcome bonus' :
-                    r.source === 'referral' ? 'Referral reward' :
-                        r.source === 'sent' ? `Sent to Meter ${r.meterId || ''}` :
-                            r.source === 'redemption' ? 'Redeemed for Credit' :
-                                r.source === 'order_payment' ? 'Used for order payment' :
-                                    'Gas reward',
+            description: r.source === 'purchase' ? `Earned from purchase (${r.units} m³)` :
+                r.source === 'purchase_reward' ? `Purchase Bonus (${r.units} m³)` :
+                r.source === 'bonus' ? `Welcome bonus (${r.units} m³)` :
+                r.source === 'referral' ? `Referral reward (${r.units} m³)` :
+                r.source === 'sent' ? `Sent ${Math.abs(r.units)} m³ to Meter ${r.meterId || ''}` :
+                r.source === 'redemption' ? `Redeemed ${Math.abs(r.units)} m³ for Credit` :
+                r.source === 'order_payment' ? `Used ${Math.abs(r.units)} m³ for payment` :
+                `Gas Reward (${r.units} m³)`,
             created_at: r.createdAt,
             meter_id: r.meterId,
+            order_amount: r.sale?.totalAmount,
             order_id: r.reference,
             metadata: {
                 gas_amount: r.units,
@@ -364,32 +372,74 @@ export const sendToMeter = async (req: AuthRequest, res: Response) => {
             return res.status(400).json({ success: false, error: `Insufficient balance. Available: ${totalUnits} m³` });
         }
 
-        // Atomic Transaction
-        await prisma.$transaction(async (prisma) => {
-            // 1. Deduct from GasReward
-            // Generate Unique Ref ID: GR-<timestamp>-<userId>-<random>
-            const refId = `GR-${Date.now()}-${userId}-${Math.floor(Math.random() * 10000)}`;
+        // Atomic Transaction + External API Call
+        try {
+            const apiResult = await prisma.$transaction(async (tx) => {
+                // 1. Deduct from GasReward
+                const refId = `REWARD-SEND-${Date.now()}-${userId}`;
 
-            await prisma.gasReward.create({
-                data: {
-                    consumerId: consumerProfile.id,
-                    units: -amount,
-                    source: 'sent',
-                    reference: refId,
-                    meterId: targetMeter.meterNumber
-                }
+                await tx.gasReward.create({
+                    data: {
+                        consumerId: consumerProfile.id,
+                        units: -amount,
+                        source: 'sent',
+                        reference: refId,
+                        meterId: targetMeter.meterNumber
+                    }
+                });
+
+                // 2. Credit GasMeter record (Local tracking)
+                await tx.gasMeter.update({
+                    where: { id: targetMeter.id },
+                    data: {
+                        currentUnits: { increment: amount }
+                    }
+                });
+
+                return { refId };
             });
 
-            // 2. Credit GasMeter
-            await prisma.gasMeter.update({
-                where: { id: targetMeter.id },
-                data: {
-                    currentUnits: { increment: amount }
-                }
-            });
-        });
+            // 3. TRIGGER ACTUAL METER RECHARGE (EXTERNAL API)
+            console.log(`[Rewards] Triggering REAL recharge for meter ${targetMeter.meterNumber} using ${amount} m3 reward units`);
+            
+            let rechargeResult;
+            if (targetMeter.meterType === 'TOKEN') {
+                // Determine if Zhongyi or Stronpower
+                // For now, default to Stronpower (TokenMeterService) as it's more common for TOKEN meters
+                rechargeResult = await tokenMeterService.rechargeTokenMeter({
+                    meterNumber: targetMeter.meterNumber,
+                    amount: amount,
+                    customerRef: apiResult.refId,
+                    isVendByUnit: true
+                });
+            } else {
+                // Piping / LoRa meters
+                rechargeResult = await pipingMeterService.rechargePipingMeter({
+                    meterNumber: targetMeter.meterNumber,
+                    amount: amount,
+                    customerRef: apiResult.refId,
+                    isVendByUnit: true
+                });
+            }
 
-        res.json({ success: true, message: `Successfully sent ${amount} m³ to Meter ${targetMeter.meterNumber}` });
+            let message = `Successfully sent ${amount} m³ to Meter ${targetMeter.meterNumber}`;
+            if (rechargeResult && rechargeResult.success && rechargeResult.token) {
+                message += `. STS Token: ${rechargeResult.token}`;
+            } else if (rechargeResult && !rechargeResult.success) {
+                message += ` (Local credit updated, but API recharge failed: ${rechargeResult.error})`;
+                console.warn(`[Rewards] Meter API failed during reward send: ${rechargeResult.error}`);
+            }
+
+            res.json({ 
+                success: true, 
+                message,
+                token: rechargeResult?.token || null
+            });
+
+        } catch (txError: any) {
+            console.error('Send to meter transaction failed:', txError);
+            throw txError;
+        }
 
     } catch (error: any) {
         console.error('Send to meter error:', error);

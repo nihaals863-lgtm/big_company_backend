@@ -552,12 +552,31 @@ export const getProducts = async (req: AuthRequest, res: Response) => {
       retailerInfo = retailer;
     }
 
+    // ENRICHMENT: If a product is missing an image, look for a matching wholesaler product
+    const enrichedProducts = await Promise.all(products.map(async (p) => {
+      if (!p.image) {
+        // Try to find a matching product from any wholesaler (template)
+        const template = await prisma.product.findFirst({
+          where: {
+            name: p.name,
+            wholesalerId: { not: null },
+            image: { not: null }
+          },
+          select: { image: true }
+        });
+        if (template) {
+          return { ...p, image: template.image };
+        }
+      }
+      return p;
+    }));
+
     res.json({
       success: true,
-      products,
+      products: enrichedProducts,
       isLinked: isApprovedForThisRetailer,
       canBuy,
-      linkedRetailerId: viewingRetailerId, // For compatibility - shows retailer being viewed
+      linkedRetailerId: viewingRetailerId,
       viewingRetailerId,
       retailerInfo
     });
@@ -774,8 +793,10 @@ export const confirmDelivery = async (req: AuthRequest, res: Response) => {
     }
 
     // Status check: Can only confirm if it was ready or shipped
-    if (!['ready', 'shipped', 'confirmed', 'processing'].includes(sale.status)) {
-      return res.status(400).json({ error: `Cannot confirm delivery for order in ${sale.status} status` });
+    if (!['ready', 'shipped'].includes(sale.status)) {
+      return res.status(400).json({ 
+        error: `Only orders in 'Shipped' or 'Ready' status can be confirmed for delivery. Current status: ${sale.status}` 
+      });
     }
 
     await prisma.sale.update({

@@ -697,13 +697,14 @@ export const updateOrderStatus = async (req: AuthRequest, res: Response) => {
     const currentOrder = await prisma.order.findUnique({ where: { id: Number(id) } });
     if (!currentOrder) return res.status(404).json({ error: 'Order not found' });
 
-    // State machine: pending -> confirmed -> shipped -> delivered
+    // State machine: pending -> confirmed (PROCEED) -> shipped -> delivered
     const validTransitions: Record<string, string[]> = {
-      'pending': ['confirmed', 'cancelled'],
-      'confirmed': ['shipped', 'cancelled'],
+      'pending': ['confirmed', 'cancelled', 'rejected'],
+      'confirmed': ['shipped', 'cancelled', 'rejected'],
       'shipped': ['delivered'],
       'delivered': [],
-      'cancelled': []
+      'cancelled': [],
+      'rejected': []
     };
 
     if (!validTransitions[currentOrder.status]?.includes(status)) {
@@ -877,7 +878,10 @@ export const rejectOrder = async (req: AuthRequest, res: Response) => {
 
     const updatedOrder = await prisma.order.update({
       where: { id: Number(id) },
-      data: { status: 'rejected' },
+      data: { 
+        status: 'rejected',
+        rejectionReason: reason || 'N/A'
+      } as any,
       include: {
         orderItems: { include: { product: true } },
         retailerProfile: { include: { user: true } }
@@ -895,7 +899,18 @@ export const rejectOrder = async (req: AuthRequest, res: Response) => {
 export const shipOrder = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const { tracking_number, delivery_notes } = req.body;
+    const shipperName = req.body.shipperName || req.body.shipper_name;
+    const shipperPhone = req.body.shipperPhone || req.body.shipper_phone;
+    const vehiclePlate = req.body.vehiclePlate || req.body.vehicle_plate;
+    const delivery_notes = req.body.delivery_notes || req.body.deliveryNotes;
+
+    // MANDATORY FIELD VALIDATION FOR SHIPPING
+    if (!shipperName || !shipperPhone || !vehiclePlate) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Mandatory shipping information missing: Shipper Name, Phone, and Vehicle Plate are required.' 
+      });
+    }
 
     const wholesalerProfile = await prisma.wholesalerProfile.findUnique({
       where: { userId: req.user!.id }
@@ -918,12 +933,17 @@ export const shipOrder = async (req: AuthRequest, res: Response) => {
     }
 
     if (order.status !== 'confirmed') {
-      return res.status(400).json({ success: false, error: `Cannot ship order with status: ${order.status}. Order must be confirmed first.` });
+      return res.status(400).json({ success: false, error: `Cannot ship order with status: ${order.status}. Order must be proceeded first.` });
     }
 
     const updatedOrder = await prisma.order.update({
       where: { id: Number(id) },
-      data: { status: 'shipped' },
+      data: { 
+        status: 'shipped',
+        shipperName,
+        shipperPhone,
+        vehiclePlate
+      } as any,
       include: {
         orderItems: { include: { product: true } },
         retailerProfile: { include: { user: true } }

@@ -39,7 +39,8 @@ import {
   approveCreditRequest,
   rejectCreditRequest,
   updateRetailerCreditLimit,
-  blockRetailer
+  blockRetailer,
+  getWholesaleHistory
 } from '../controllers/retailersController';
 import {
   getManagementStats,
@@ -87,10 +88,11 @@ router.post('/retailer-orders/:id/reject', rejectOrder);
 router.post('/retailer-orders/:id/ship', shipOrder);
 router.post('/retailer-orders/:id/deliver', confirmDelivery);
 
-// Credit Management (Wholesaler specific)
-router.get('/credit-requests', getCreditRequests);
+// Credit Management
+router.get('/credit-requests', getCreditRequestsWithStats);
 router.post('/credit-requests/:id/approve', approveCreditRequest);
 router.post('/credit-requests/:id/reject', rejectCreditRequest);
+router.get('/wallet-history', getWholesaleHistory);
 
 // Retailers
 router.get('/retailers', getRetailers);
@@ -120,10 +122,7 @@ router.get('/profile', getWholesalerProfile);
 router.put('/profile', updateWholesalerProfile);
 router.put('/settings', updateWholesalerSettings);
 
-// Credit Management
-router.get('/credit-requests', getCreditRequestsWithStats);
-router.post('/credit-requests/:id/approve', approveCreditRequest);
-router.post('/credit-requests/:id/reject', rejectCreditRequest);
+
 
 // Link Request Management (Retailer-Wholesaler Linking)
 router.get('/link-requests', getLinkRequests);

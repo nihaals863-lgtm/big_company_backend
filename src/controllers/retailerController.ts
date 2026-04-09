@@ -785,8 +785,14 @@ export const createSale = async (req: AuthRequest, res: Response) => {
     const total = (subtotal + tax_amount - (discount || 0));
 
     // 1. Validate items and stock
+    const productIds = items.map((item: any) => Number(item.product_id));
+    const products = await prisma.product.findMany({
+      where: { id: { in: productIds } }
+    });
+    const productMap = new Map(products.map(p => [p.id, p]));
+
     for (const item of items) {
-      const product = await prisma.product.findUnique({ where: { id: Number(item.product_id) } });
+      const product = productMap.get(Number(item.product_id));
       if (!product || product.stock < item.quantity) {
         return res.status(400).json({
           error: `Insufficient stock for product: ${product?.name || item.product_id}`
@@ -794,27 +800,46 @@ export const createSale = async (req: AuthRequest, res: Response) => {
       }
     }
 
-    // 2. Perform Transaction
+    // 2. Perform Transaction with increased timeout for remote DB
     const result = await prisma.$transaction(async (prisma) => {
       let consumerId = null;
 
       // --- Handle NFC Payment ---
       if (payment_method === 'nfc') {
-        const { uid, pin } = payment_details || {};
+        const { uid, pin, wallet_type } = payment_details || {};
         const card = await prisma.nfcCard.findUnique({ where: { uid } });
 
         if (!card) throw new Error('NFC Card not found');
         if (card.status !== 'active') throw new Error('NFC Card is not active');
         if (pin && card.pin !== pin) throw new Error('Invalid NFC PIN');
-        if (card.balance < total) throw new Error('Insufficient NFC card balance');
+        if (!card.consumerId) throw new Error('NFC Card is not linked to any customer');
 
-        // Deduct from card
-        await prisma.nfcCard.update({
-          where: { id: card.id },
+        consumerId = card.consumerId;
+
+        // Resolve target wallet (dashboard or credit)
+        const targetWalletType = wallet_type === 'credit' ? 'credit_wallet' : 'dashboard_wallet';
+        
+        const wallet = await prisma.wallet.findFirst({
+          where: { consumerId: consumerId, type: targetWalletType }
+        });
+
+        if (!wallet || wallet.balance < total) {
+          throw new Error(`Insufficient ${wallet_type || 'dashboard'} wallet balance`);
+        }
+
+        // Deduct from wallet
+        await prisma.wallet.update({
+          where: { id: wallet.id },
           data: { balance: { decrement: total } }
         });
 
-        consumerId = card.consumerId;
+        // Sync legacy ConsumerProfile balance if using dashboard wallet
+        if (targetWalletType === 'dashboard_wallet') {
+          await prisma.consumerProfile.update({
+            where: { id: consumerId },
+            data: { walletBalance: { decrement: total } }
+          });
+        }
       }
 
       // --- Handle Wallet Payment ---
@@ -825,9 +850,22 @@ export const createSale = async (req: AuthRequest, res: Response) => {
         });
 
         if (!consumer) throw new Error('Consumer profile not found for this phone number');
-        if (consumer.walletBalance < total) throw new Error('Insufficient dashboard wallet balance');
+        
+        const wallet = await prisma.wallet.findFirst({
+          where: { consumerId: consumer.id, type: 'dashboard_wallet' }
+        });
+
+        if (!wallet || wallet.balance < total) {
+          throw new Error('Insufficient dashboard wallet balance');
+        }
 
         // Deduct from wallet
+        await prisma.wallet.update({
+          where: { id: wallet.id },
+          data: { balance: { decrement: total } }
+        });
+
+        // Sync legacy profile balance
         await prisma.consumerProfile.update({
           where: { id: consumer.id },
           data: { walletBalance: { decrement: total } }
@@ -835,6 +873,7 @@ export const createSale = async (req: AuthRequest, res: Response) => {
 
         consumerId = consumer.id;
       }
+
 
       // --- Handle PalmKash (Mobile Money) ---
       let externalRef = null;
@@ -890,7 +929,8 @@ export const createSale = async (req: AuthRequest, res: Response) => {
 
       // Log Transaction if linked to consumer
       if (consumerId && (['wallet', 'dashboard_wallet', 'credit_wallet', 'nfc'].includes(payment_method))) {
-        const walletType = payment_method === 'credit_wallet' ? 'credit_wallet' : 'dashboard_wallet';
+        const { wallet_type } = payment_details || {};
+        const walletType = (payment_method === 'credit_wallet' || wallet_type === 'credit') ? 'credit_wallet' : 'dashboard_wallet';
         const wallet = await prisma.wallet.findFirst({
           where: { consumerId: consumerId, type: walletType }
         });
@@ -926,7 +966,7 @@ export const createSale = async (req: AuthRequest, res: Response) => {
         let totalProfit = 0;
 
         for (const item of items) {
-          const product = await prisma.product.findUnique({ where: { id: Number(item.product_id) } });
+          const product = productMap.get(Number(item.product_id));
           if (product && product.costPrice) {
             const profitPerItem = item.price - product.costPrice;
             if (profitPerItem > 0) {
@@ -960,7 +1000,7 @@ export const createSale = async (req: AuthRequest, res: Response) => {
       }
 
       return sale;
-    });
+    }, { timeout: 20000 });
 
     res.json({ success: true, sale: result });
 
@@ -974,7 +1014,12 @@ export const createSale = async (req: AuthRequest, res: Response) => {
 export const updateSaleStatus = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
-    let { status, notes, shipper_name, shipper_phone, vehicle_plate, reason } = req.body;
+    let { status, notes, shipper_name, shipper_phone, vehicle_plate, shipperName, shipperPhone, vehiclePlate, reason } = req.body;
+
+    // Handle both camelCase and snake_case
+    const name = shipper_name || shipperName;
+    const phone = shipper_phone || shipperPhone;
+    const plate = vehicle_plate || vehiclePlate;
 
     const retailerProfile = await prisma.retailerProfile.findUnique({
       where: { userId: req.user!.id }
@@ -989,16 +1034,14 @@ export const updateSaleStatus = async (req: AuthRequest, res: Response) => {
       return res.status(404).json({ error: 'Order not found' });
     }
 
-    // Map frontend status names to backend: processing = confirmed
-    if (status === 'processing') status = 'confirmed';
-
     // State machine: pending -> confirmed/processing -> shipped -> ready -> completed / delivered
+    // MAP: 'confirmed' or 'processing' will be treated as "Proceed" in UI
     const validTransitions: Record<string, string[]> = {
       'pending': ['confirmed', 'processing', 'cancelled'],
       'confirmed': ['shipped', 'ready', 'cancelled'],
       'processing': ['shipped', 'ready', 'cancelled'],
-      'shipped': ['ready', 'delivered', 'completed'],
-      'ready': ['completed', 'delivered'],
+      'shipped': ['delivered', 'completed'], // Retailer can SHIP, but Customer/Admin confirms Delivery
+      'ready': ['shipped', 'completed', 'delivered'],
       'completed': [],
       'delivered': [],
       'cancelled': []
@@ -1010,11 +1053,24 @@ export const updateSaleStatus = async (req: AuthRequest, res: Response) => {
       });
     }
 
+    // Restriction: Retailer cannot set status to 'delivered' directly easily 
+    // unless they are explicitly allowed (client requirement says Customer or Admin)
+    if (status === 'delivered' && req.user!.role !== 'admin') {
+      return res.status(403).json({ 
+        error: 'Only customers or administrators can confirm delivery.' 
+      });
+    }
+
     const updateData: any = { status };
     if (status === 'shipped') {
-      updateData.shipperName = shipper_name;
-      updateData.shipperPhone = shipper_phone;
-      updateData.vehiclePlate = vehicle_plate;
+      if (!name || !phone || !plate) {
+        return res.status(400).json({
+          error: 'Shipper name, telephone, and vehicle plate number are required to ship the order.'
+        });
+      }
+      updateData.shipperName = name;
+      updateData.shipperPhone = phone;
+      updateData.vehiclePlate = plate;
     }
     if (status === 'cancelled' && reason) {
       updateData.rejectionReason = reason;
@@ -1421,31 +1477,53 @@ export const getWalletTransactions = async (req: AuthRequest, res: Response) => 
 
     const { limit = '10', offset = '0' } = req.query;
 
-    // Currently, Retailers do not have a dedicated Wallet Transaction table in the schema.
-    // We will serve the Order history as a proxy for "Debit" transactions.
-    // Capital Top-ups update the balance but are not logged as transactions yet (pending schema update).
+    // Unified Transaction History: Merging Orders (Debits) and WalletTransactions (Topups/Credits)
+    const [orders, walletTx] = await Promise.all([
+      prisma.order.findMany({
+        where: { retailerId: retailerProfile.id },
+        orderBy: { createdAt: 'desc' },
+        take: parseInt(limit as string),
+        skip: parseInt(offset as string)
+      }),
+      prisma.walletTransaction.findMany({
+        where: { retailerId: retailerProfile.id },
+        orderBy: { createdAt: 'desc' },
+        take: parseInt(limit as string),
+        skip: parseInt(offset as string)
+      })
+    ]);
 
-    const orders = await prisma.order.findMany({
-      where: { retailerId: retailerProfile.id },
-      orderBy: { createdAt: 'desc' },
-      take: parseInt(limit as string),
-      skip: parseInt(offset as string)
-    });
-
-    const transactions = orders.map(o => ({
-      id: o.id,
+    const formattedOrders = orders.map(o => ({
+      id: `ORD-${o.id}`,
       type: 'debit',
       amount: o.totalAmount,
-      balance_after: 0, // Not tracked per row
-      description: `Order #${o.id.toString().substring(0, 8)}`,
+      balance_after: 0, 
+      description: `Inventory Order #${o.id.toString().substring(0, 8).toUpperCase()}`,
       reference: o.id.toString(),
-      status: 'completed',
+      status: o.status?.toLowerCase() === 'completed' ? 'completed' : o.status?.toLowerCase() === 'pending' ? 'pending' : 'processing',
       created_at: o.createdAt
     }));
 
-    const total = await prisma.order.count({ where: { retailerId: retailerProfile.id } });
+    const formattedWalletTx = walletTx.map(t => ({
+      id: `TX-${t.id}`,
+      type: t.type === 'topup' ? 'credit' : t.type,
+      amount: t.amount,
+      balance_after: 0,
+      description: t.description || 'Wallet Transaction',
+      reference: t.reference,
+      status: t.status,
+      created_at: t.createdAt
+    }));
 
-    res.json({ transactions, total });
+    // Merge and sort by date desc
+    const transactions = [...formattedOrders, ...formattedWalletTx]
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      .slice(0, parseInt(limit as string));
+
+    const totalOrders = await prisma.order.count({ where: { retailerId: retailerProfile.id } });
+    const totalWalletTx = await prisma.walletTransaction.count({ where: { retailerId: retailerProfile.id } });
+
+    res.json({ transactions, total: totalOrders + totalWalletTx });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -1866,6 +1944,7 @@ export const topUpWallet = async (req: AuthRequest, res: Response) => {
     let transactionRef = `TOPUP-${Date.now()}`; // Correct prefix for webhook
 
     if (source === 'mobile_money' || source === 'momo') {
+        console.log(`📡 [topUpWallet] Initiating PalmKash payment for phone: ${req.body.phone || (retailerProfile as any).user?.phone}`);
         const palmKash = (await import('../services/palmKash.service')).default;
         const pmResult = await palmKash.initiatePayment({
             amount: parseFloat(amount),
@@ -1873,6 +1952,7 @@ export const topUpWallet = async (req: AuthRequest, res: Response) => {
             referenceId: transactionRef,
             description: `Retailer Wallet Topup`
         });
+        console.log('📥 [topUpWallet] PalmKash result:', pmResult);
 
         if (!pmResult.success) {
             return res.status(400).json({ success: false, error: pmResult.error });
@@ -2715,7 +2795,12 @@ export const getPurchaseOrders = async (req: AuthRequest, res: Response) => {
       status: order.status,
       payment_method: order.paymentMethod,
       created_at: order.createdAt,
-      items_count: order.orderItems.length
+      items_count: order.orderItems.length,
+      shipper_name: order.shipperName,
+      shipper_phone: order.shipperPhone,
+      vehicle_plate: order.vehiclePlate,
+      rejection_reason: order.rejectionReason,
+      cancellation_reason: order.cancellationReason
     }));
 
     res.json({
@@ -2769,6 +2854,11 @@ export const getPurchaseOrder = async (req: AuthRequest, res: Response) => {
       status: order.status,
       payment_method: order.paymentMethod,
       created_at: order.createdAt,
+      shipper_name: order.shipperName,
+      shipper_phone: order.shipperPhone,
+      vehicle_plate: order.vehiclePlate,
+      rejection_reason: order.rejectionReason,
+      cancellation_reason: order.cancellationReason,
       items: order.orderItems.map(item => ({
         id: item.id,
         product_name: item.product?.name || 'Unknown Product',
@@ -2782,6 +2872,51 @@ export const getPurchaseOrder = async (req: AuthRequest, res: Response) => {
     res.json({ order: formattedOrder });
   } catch (error: any) {
     console.error('❌ Error fetching purchase order detail:', error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// Confirm delivery of a purchase order (Wholesale order)
+export const confirmPurchaseOrderDelivery = async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    const retailerProfile = await prisma.retailerProfile.findUnique({
+      where: { userId: req.user!.id }
+    });
+
+    if (!retailerProfile) {
+      return res.status(404).json({ error: 'Retailer profile not found' });
+    }
+
+    const order = await prisma.order.findUnique({
+      where: { id: Number(id) }
+    });
+
+    if (!order || order.retailerId !== retailerProfile.id) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+
+    // Only allow confirmation if order is shipped or confirmed (standard flow)
+    const allowedStatuses = ['shipped', 'confirmed', 'processing'];
+    if (!allowedStatuses.includes(order.status)) {
+      return res.status(400).json({ 
+        error: `Cannot confirm delivery for order in ${order.status} status` 
+      });
+    }
+
+    const updatedOrder = await prisma.order.update({
+      where: { id: order.id },
+      data: { status: 'delivered' }
+    });
+
+    res.json({ 
+      success: true, 
+      message: 'Purchase order marked as delivered',
+      order: updatedOrder 
+    });
+  } catch (error: any) {
+    console.error('❌ Error confirming purchase order delivery:', error);
     res.status(500).json({ error: error.message });
   }
 };

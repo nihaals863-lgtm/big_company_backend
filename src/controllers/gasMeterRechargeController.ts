@@ -58,8 +58,10 @@ export const initiateGasMeterRecharge = async (req: AuthRequest, res: Response) 
 
     const parsedAmount = Number(amount || 0);
     
+    const gasPrice = Number(process.env.GAS_PRICE_PER_M3) || 1500;
+    
     // Money amount is chosen directly now on the frontend
-    let totalMoneyAmount = isVendByUnit ? parsedAmount * 1500 : parsedAmount;
+    let totalMoneyAmount = isVendByUnit ? parsedAmount * gasPrice : parsedAmount;
 
     // ZERO cost for Token Push Mode
     if (isPushToken) {
@@ -225,7 +227,7 @@ export const initiateGasMeterRecharge = async (req: AuthRequest, res: Response) 
                 customerId: consumerProfileId,
                 meterNumber,
                 meterType,
-                amount: parsedAmount,
+                amount: totalMoneyAmount,
                 isVendByUnit: !!isVendByUnit,
                 paymentMethod: paymentMethod || 'wallet',
                 status: paymentMethod === 'mobile_money' ? 'PENDING_PAYMENT' : 'PENDING',
@@ -248,6 +250,7 @@ export const initiateGasMeterRecharge = async (req: AuthRequest, res: Response) 
                 meterNumber,
                 amount: parsedAmount,
                 customerRef,
+                isVendByUnit: !!isVendByUnit,
             });
         } else {
             // Apply Stronpower API (tokenMeterService) for both TOKEN and PIPING/LoRa meters
@@ -292,6 +295,32 @@ export const initiateGasMeterRecharge = async (req: AuthRequest, res: Response) 
     });
 
     if (apiResult.success) {
+        // Create a Sale record for the recharge to ensure it appears in rewards history and reports
+        let linkedSaleId: number | null = null;
+        try {
+            // Find a retailer to link the sale to (if operator is a retailer, or use a default)
+            let retailerId = 1; // Default/System retailer
+            if (userRole === 'retailer') {
+                const rp = await prisma.retailerProfile.findUnique({ where: { userId } });
+                if (rp) retailerId = rp.id;
+            }
+
+            const sale = await prisma.sale.create({
+                data: {
+                    retailerId: retailerId,
+                    consumerId: consumerProfileId,
+                    totalAmount: totalMoneyAmount,
+                    paymentMethod: paymentMethod || 'wallet',
+                    status: 'completed'
+                }
+            });
+            linkedSaleId = sale.id;
+            
+            // Also update the txRecord with saleId if field exists (optional, but good for tracking)
+        } catch (saleErr) {
+            console.error('[GasRecharge] Failed to create linked Sale record:', saleErr);
+        }
+
         try {
             const meter = await prisma.gasMeter.findUnique({
                 where: { meterNumber: meterNumber }
@@ -313,16 +342,35 @@ export const initiateGasMeterRecharge = async (req: AuthRequest, res: Response) 
                 }
 
                 if (consumerProfileId) {
+                    const unitsPurchased = Number(apiResult.units) || 0;
+                    
+                    // Award Gas Topup record
                     await prisma.gasTopup.create({
                         data: {
                             consumerId: consumerProfileId,
                             meterId: meter.id,
-                            amount: isVendByUnit ? parsedAmount * 1500 : parsedAmount,
-                            units: Number(apiResult.units) || 0,
+                            amount: totalMoneyAmount,
+                            units: unitsPurchased,
                             status: paymentMethod === 'mobile_money' ? 'pending' : 'completed',
                             orderId: String(txRecord.id)
                         }
                     });
+
+                    // Award Gas Reward (10% of units purchased)
+                    if (unitsPurchased > 0) {
+                        const rewardUnits = Number((unitsPurchased * 0.1).toFixed(4));
+                        await prisma.gasReward.create({
+                            data: {
+                                consumerId: consumerProfileId,
+                                units: rewardUnits,
+                                source: 'purchase',
+                                reference: `Reward for Recharge #${txRecord.id}`,
+                                saleId: linkedSaleId,
+                                meterId: meter.meterNumber
+                            }
+                        });
+                        console.log(`[GasRecharge] Awarded ${rewardUnits} m3 reward to consumer ${consumerProfileId}`);
+                    }
                 }
 
                 if (paymentMethod !== 'mobile_money') {
@@ -345,7 +393,8 @@ export const initiateGasMeterRecharge = async (req: AuthRequest, res: Response) 
         // Refund logic...
         if (userId && paymentMethod === 'wallet') {
             try {
-                const totalMoneyAmount = isVendByUnit ? parsedAmount * 1500 : parsedAmount;
+                const gasPrice = Number(process.env.GAS_PRICE_PER_M3) || 1500;
+                const totalMoneyAmount = isVendByUnit ? parsedAmount * gasPrice : parsedAmount;
                 if (!consumerProfileId) return; // Cannot refund if no profile (though unlikely if payment succeeded)
 
                 const wallet = await prisma.wallet.findFirst({
@@ -384,7 +433,7 @@ export const initiateGasMeterRecharge = async (req: AuthRequest, res: Response) 
             transactionId: txRecord.id,
             meterNumber,
             meterType,
-            amount: parsedAmount,
+            amount: totalMoneyAmount,
             units: apiResult.units,
             apiReference: apiResult.apiReference,
             message: apiResult.message || 'Recharge successful',

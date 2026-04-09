@@ -1,6 +1,20 @@
 import { Response } from 'express';
 import { AuthRequest } from '../middleware/authMiddleware';
 import prisma from '../utils/prisma';
+import fs from 'fs';
+import path from 'path';
+
+const LOG_FILE = path.join(process.cwd(), 'debug_approve.log');
+
+function logDebug(message: string, data?: any) {
+    const timestamp = new Date().toISOString();
+    const logEntry = `[${timestamp}] ${message} ${data ? JSON.stringify(data, null, 2) : ''}\n`;
+    try {
+        fs.appendFileSync(LOG_FILE, logEntry);
+    } catch (e) {
+        console.error('Failed to write to debug log:', e);
+    }
+}
 
 // ============================================
 // RETAILERS MANAGEMENT
@@ -286,8 +300,9 @@ export const getSupplierOrders = async (req: AuthRequest, res: Response) => {
             return res.status(404).json({ error: 'Wholesaler profile not found' });
         }
 
-        // Get all supplier payments
+        // Get all supplier payments for this wholesaler
         const payments = await prisma.supplierPayment.findMany({
+            where: { wholesalerId: wholesalerProfile.id },
             include: {
                 supplier: true
             },
@@ -301,9 +316,9 @@ export const getSupplierOrders = async (req: AuthRequest, res: Response) => {
             invoiceNumber: payment.reference || `PAY-${payment.id.toString().substring(0, 8)}`,
             totalAmount: payment.amount,
             paymentStatus: payment.status as 'paid' | 'pending' | 'partial',
-            itemsCount: 0, // Not tracked in current schema
+            itemsCount: payment.notes?.match(/Items:\s*(\d+)/i)?.[1] || 0, // Try to parse items count from notes if any
             createdAt: payment.paymentDate.toISOString(),
-            paidAt: payment.status === 'completed' ? payment.paymentDate.toISOString() : undefined
+            paidAt: (payment.status === 'completed' || payment.status === 'paid') ? payment.paymentDate.toISOString() : undefined
         }));
 
         const totalAmount = payments.reduce((sum, p) => sum + p.amount, 0);
@@ -436,35 +451,71 @@ export const getCreditRequestsWithStats = async (req: AuthRequest, res: Response
 export const approveCreditRequest = async (req: AuthRequest, res: Response) => {
     try {
         const { id } = req.params;
-
-        const creditRequest = await prisma.creditRequest.update({
-            where: { id: Number(id) },
-            data: {
-                status: 'approved',
-                reviewedAt: new Date()
-            },
-            include: {
-                retailerProfile: {
-                    include: { credit: true }
-                }
-            }
-        });
-
-        // Update retailer credit limit
-        if (creditRequest.retailerProfile.credit) {
-            await prisma.retailerCredit.update({
-                where: { id: creditRequest.retailerProfile.credit.id },
-                data: {
-                    creditLimit: creditRequest.retailerProfile.credit.creditLimit + creditRequest.amount,
-                    availableCredit: creditRequest.retailerProfile.credit.availableCredit + creditRequest.amount
+        
+        const result = await prisma.$transaction(async (tx) => {
+            const creditRequest = await tx.creditRequest.findUnique({
+                where: { id: Number(id) },
+                include: {
+                    retailerProfile: true
                 }
             });
-        }
 
-        res.json({ success: true, creditRequest });
+            if (!creditRequest) {
+                throw new Error('Credit request not found');
+            }
+
+            // Update credit request status
+            await tx.creditRequest.update({
+                where: { id: Number(id) },
+                data: {
+                    status: 'approved',
+                    reviewedAt: new Date()
+                }
+            });
+
+            // Use upsert to handle both existing and non-existing credit records reliably
+            await tx.retailerCredit.upsert({
+                where: { retailerId: creditRequest.retailerId },
+                update: {
+                    creditLimit: { increment: creditRequest.amount },
+                    availableCredit: { increment: creditRequest.amount }
+                },
+                create: {
+                    retailerId: creditRequest.retailerId,
+                    creditLimit: creditRequest.amount,
+                    availableCredit: creditRequest.amount,
+                    usedCredit: 0
+                }
+            });
+
+            // LOG IN WALLET TRANSACTIONS for history
+            try {
+                await tx.walletTransaction.create({
+                    data: {
+                        retailerId: creditRequest.retailerId,
+                        amount: creditRequest.amount,
+                        type: 'credit_extension',
+                        status: 'completed',
+                        description: `Credit limit increased from request #${creditRequest.id}`,
+                        reference: `CR-${creditRequest.id}`
+                    }
+                });
+            } catch (txError: any) {
+                console.error('⚠️ Failed to log wallet transaction, but proceeding with approval:', txError.message);
+            }
+
+            return creditRequest;
+        }, {
+            timeout: 20000 // Increase timeout to 20 seconds
+        });
+
+        res.json({ success: true, creditRequest: result });
     } catch (error: any) {
         console.error('❌ Error approving credit request:', error);
-        res.status(500).json({ error: error.message });
+        res.status(500).json({ 
+            error: error.message,
+            code: error.code 
+        });
     }
 };
 
@@ -557,4 +608,125 @@ export const updateRetailerCreditLimit = async (req: AuthRequest, res: Response)
 // Block/Unblock retailer
 export const blockRetailer = async (req: AuthRequest, res: Response) => {
     res.json({ success: true, message: 'Status updated successfully' });
+};
+
+// ============================================
+// UNIFIED WALLET HISTORY
+// ============================================
+
+export const getWholesaleHistory = async (req: AuthRequest, res: Response) => {
+    try {
+        const wholesalerUser = await prisma.user.findUnique({
+            where: { id: req.user!.id },
+            include: { wholesalerProfile: true }
+        });
+
+        const wholesalerProfile = wholesalerUser?.wholesalerProfile;
+
+        if (!wholesalerProfile) {
+            return res.status(404).json({ error: 'Wholesaler profile not found' });
+        }
+
+        // 1. Get ALL retailers managed by this wholesaler
+        const managedRetailers = await prisma.retailerProfile.findMany({
+            where: {
+                OR: [
+                    { linkedWholesalerId: wholesalerProfile.id },
+                    { linkRequests: { some: { wholesalerId: wholesalerProfile.id, status: 'approved' } } }
+                ]
+            },
+            select: { id: true, shopName: true, user: { select: { name: true } } }
+        });
+
+        const retailerIds = managedRetailers.map(r => r.id);
+        const retailerNamesMap = Object.fromEntries(
+            managedRetailers.map(r => [r.id, r.shopName || r.user?.name || `Retailer #${r.id}`])
+        );
+
+        // 2. Get Supplier Payments (Supplier Order History)
+        const supplierPayments = await prisma.supplierPayment.findMany({
+            where: { wholesalerId: wholesalerProfile.id },
+            include: { supplier: true },
+            orderBy: { paymentDate: 'desc' }
+        });
+
+        // 3. Get Credit History from WalletTransaction (Primary source for "recorded" logs)
+        const creditLogs = await prisma.walletTransaction.findMany({
+            where: {
+                retailerId: { in: retailerIds },
+                type: 'credit_extension',
+                status: 'completed'
+            },
+            orderBy: { createdAt: 'desc' }
+        });
+
+        // 4. Get CreditRequests for legacy/backup (if transactions are missing)
+        const creditRequests = await prisma.creditRequest.findMany({
+            where: {
+                status: 'approved',
+                retailerProfile: { id: { in: retailerIds } },
+                // Only get requests that DON'T have a corresponding transaction reference if possible
+                // For simplicity, we'll merge and deduplicate by reference in JS
+            },
+            include: { retailerProfile: { include: { user: true } } },
+            orderBy: { reviewedAt: 'desc' }
+        });
+
+        // Merge and Transform
+        const combinedHistory: any[] = [];
+
+        // Add Supplier Payments
+        supplierPayments.forEach(p => {
+            combinedHistory.push({
+                id: `SP-${p.id}`,
+                type: 'supplier_payment',
+                title: 'Supplier Payment',
+                party: p.supplier?.name || 'Unknown Supplier',
+                amount: p.amount,
+                date: p.paymentDate,
+                status: p.status,
+                reference: p.reference || `PAY-${p.id}`
+            });
+        });
+
+        // Add Credit Logs (Transaction based)
+        creditLogs.forEach(log => {
+            combinedHistory.push({
+                id: `TX-${log.id}`,
+                type: 'credit_approval',
+                title: 'Credit Approval',
+                party: retailerNamesMap[log.retailerId!] || 'Unknown Retailer',
+                amount: log.amount,
+                date: log.createdAt,
+                status: 'completed',
+                reference: log.reference || `TX-${log.id}`
+            });
+        });
+
+        // Add Credit Requests (Fallback/Deduplicate by reference)
+        const existingRefs = new Set(combinedHistory.map(h => h.reference));
+        creditRequests.forEach(c => {
+            const ref = `CR-${c.id}`;
+            if (!existingRefs.has(ref)) {
+                combinedHistory.push({
+                    id: `CR-${c.id}`,
+                    type: 'credit_approval',
+                    title: 'Credit Approval',
+                    party: c.retailerProfile.shopName || c.retailerProfile.user?.name || 'Retailer',
+                    amount: c.amount,
+                    date: c.reviewedAt || c.createdAt,
+                    status: 'completed',
+                    reference: ref
+                });
+            }
+        });
+
+        // Sort unified history by date descending
+        combinedHistory.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+        res.json({ success: true, history: combinedHistory, count: combinedHistory.length });
+    } catch (error: any) {
+        console.error('❌ Error fetching wholesale history:', error);
+        res.status(500).json({ error: error.message });
+    }
 };

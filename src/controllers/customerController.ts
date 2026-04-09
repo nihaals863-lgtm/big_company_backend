@@ -83,14 +83,16 @@ export const getCustomerProfile = async (req: AuthRequest, res: Response) => {
         // If no purchase yet, but has approved links, use the first approved one as linkedRetailer
         const primaryRetailer = lastRetailer || (linkedRetailers.length > 0 ? linkedRetailers[0] : null);
 
-        // Check and generate Gas Reward Wallet ID if missing
-        if (!consumerProfile.gasRewardWalletId) {
-            const generatedId = 'GRW-' + Math.random().toString(36).substring(2, 10).toUpperCase();
-            await prisma.consumerProfile.update({
-                where: { id: consumerProfile.id },
-                data: { gasRewardWalletId: generatedId }
-            });
-            consumerProfile.gasRewardWalletId = generatedId;
+        // Check and generate Gas Reward Wallet ID if missing (Requirement: Use Phone Number)
+        if (!consumerProfile.gasRewardWalletId || consumerProfile.gasRewardWalletId.startsWith('GRW-')) {
+            const phoneId = consumerProfile.user.phone;
+            if (phoneId) {
+                await prisma.consumerProfile.update({
+                    where: { id: consumerProfile.id },
+                    data: { gasRewardWalletId: phoneId }
+                });
+                consumerProfile.gasRewardWalletId = phoneId;
+            }
         }
 
         res.json({

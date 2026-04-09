@@ -2663,3 +2663,88 @@ export const deleteSettlementInvoice = async (req: AuthRequest, res: Response) =
     res.status(500).json({ success: false, error: error.message });
   }
 };
+
+// ==========================================
+// ORDER MANAGMENT (Admin override)
+// ==========================================
+
+// Confirm delivery of an order (Admin overriding Wholesaler/Retailer)
+export const confirmWholesaleDelivery = async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    const order = await prisma.order.findUnique({
+      where: { id: Number(id) }
+    });
+
+    if (!order) {
+      return res.status(404).json({ success: false, error: 'Order not found' });
+    }
+
+    if (order.status !== 'shipped' && order.status !== 'processing' && order.status !== 'confirmed') {
+      return res.status(400).json({ success: false, error: `Cannot confirm delivery for order with status: ${order.status}. Order must be shipped first.` });
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
+      // 1. Update order status
+      const updatedOrder = await tx.order.update({
+        where: { id: Number(id) },
+        data: { status: 'delivered' },
+        include: {
+          orderItems: { include: { product: true } },
+          retailerProfile: true
+        }
+      });
+
+      // 2. Update Retailer's Inventory
+      for (const item of updatedOrder.orderItems) {
+        if (!item.product) continue;
+
+        // Search for existing product in retailer's inventory
+        const existingProduct = await tx.product.findFirst({
+          where: {
+            retailerId: updatedOrder.retailerId,
+            OR: [
+              item.product.barcode ? { barcode: item.product.barcode } : { id: -1 },
+              item.product.sku ? { sku: item.product.sku } : { id: -1 },
+              { name: item.product.name }
+            ]
+          }
+        });
+
+        if (existingProduct) {
+          // Update existing stock
+          await tx.product.update({
+            where: { id: existingProduct.id },
+            data: { stock: { increment: item.quantity } }
+          });
+        } else {
+          // Create new product for retailer based on wholesaler's product
+          await tx.product.create({
+            data: {
+              name: item.product.name,
+              description: item.product.description,
+              sku: item.product.sku,
+              barcode: item.product.barcode,
+              category: item.product.category,
+              price: item.product.price * 1.2, // Default 20% markup for retailer if new
+              costPrice: item.product.price,
+              stock: item.quantity,
+              retailerId: updatedOrder.retailerId,
+              unit: item.product.unit,
+              status: 'active'
+            }
+          });
+        }
+      }
+
+      return updatedOrder;
+    }, { timeout: 15000 });
+
+    res.json({ success: true, order: result, message: 'Delivery confirmed and retailer stock updated by Admin' });
+  } catch (error: any) {
+    console.error('Error confirming delivery by Admin:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+

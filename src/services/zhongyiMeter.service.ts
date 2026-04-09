@@ -14,6 +14,7 @@ export interface ZhongyiMeterRechargeParams {
     meterNumber: string;  
     amount: number;
     customerRef: string;
+    isVendByUnit?: boolean;
 }
 
 export interface ZhongyiMeterRechargeResult {
@@ -225,7 +226,7 @@ class ZhongyiMeterService {
                 token: extractedToken,
                 meterNumber: meterNumber,
                 amount: params.amount,
-                units: extractedUnits || this.calculateUnits(params.amount),
+                units: extractedUnits || (params.isVendByUnit ? params.amount : this.calculateUnits(params.amount)),
                 apiReference: extractedId || String(orderId),
                 message: finalResponse.msg || 'Recharge successful',
                 raw: finalResponse
@@ -244,7 +245,8 @@ class ZhongyiMeterService {
 
     /** 1,100 RWF ≈ 1 m3 Piped Gas (Conversion rate) */
     private calculateUnits(amountRwf: number): number {
-        return parseFloat((amountRwf / 1100).toFixed(4));
+        const rate = Number(process.env.GAS_PRICE_PER_M3) || 1500;
+        return parseFloat((amountRwf / rate).toFixed(4));
     }
 }
 

@@ -248,7 +248,8 @@ class TokenMeterService {
     }
 
     private calculateUnits(amountRwf: number): number {
-        return parseFloat((amountRwf / 1500).toFixed(4));
+        const rate = Number(process.env.GAS_PRICE_PER_M3) || 1500;
+        return parseFloat((amountRwf / rate).toFixed(4));
     }
 
     private generateLocalToken(): string {

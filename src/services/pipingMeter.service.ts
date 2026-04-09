@@ -7,6 +7,7 @@ export interface PipingMeterRechargeParams {
     token?: string;        // Added for token-based recharge
     customerRef: string;   // Internal tracking reference
     customerPhone?: string;
+    isVendByUnit?: boolean; // New: support direct unit recharge
 }
 
 export interface PipingMeterRechargeResult {
@@ -300,7 +301,9 @@ class PipingMeterService {
 
     async rechargePipingMeter(params: PipingMeterRechargeParams): Promise<PipingMeterRechargeResult> {
         try {
-            const unitsAmount = this.calculateUnits(params.amount || 0);
+            // If isVendByUnit is true, amount is already in m3. 
+            // Otherwise, calculate m3 from RWF.
+            const unitsAmount = params.isVendByUnit ? (params.amount || 0) : this.calculateUnits(params.amount || 0);
 
             // Fetch the correct identifier from DB
             const apiIdentifier = params.meterNumber;
