@@ -2905,15 +2905,70 @@ export const confirmPurchaseOrderDelivery = async (req: AuthRequest, res: Respon
       });
     }
 
-    const updatedOrder = await prisma.order.update({
-      where: { id: order.id },
-      data: { status: 'delivered' }
-    });
+    const result = await prisma.$transaction(async (tx) => {
+      // 1. Update order status
+      const updatedOrder = await tx.order.update({
+        where: { id: order.id },
+        data: { status: 'delivered' },
+        include: {
+          orderItems: { include: { product: true } }
+        }
+      });
+
+      // 2. Update Retailer's Inventory
+      for (const item of updatedOrder.orderItems) {
+        if (!item.product) continue;
+
+        // Search for existing product in retailer's inventory
+        // Priority: Barcode > SKU > Name
+        const existingProduct = await tx.product.findFirst({
+          where: {
+            retailerId: retailerProfile.id,
+            OR: [
+              item.product.barcode ? { barcode: item.product.barcode } : { id: -1 },
+              item.product.sku ? { sku: item.product.sku } : { id: -1 },
+              { name: item.product.name }
+            ]
+          }
+        });
+
+        if (existingProduct) {
+          // Update existing stock and ensure it's active
+          await tx.product.update({
+            where: { id: existingProduct.id },
+            data: { 
+              stock: { increment: item.quantity },
+              status: 'active'
+            }
+          });
+        } else {
+          // Create new product for retailer based on wholesaler's product
+          await tx.product.create({
+            data: {
+              name: item.product.name,
+              description: item.product.description,
+              sku: item.product.sku,
+              barcode: item.product.barcode,
+              category: item.product.category,
+              price: item.product.price * 1.2, // Default 20% markup for retailer if new
+              costPrice: item.product.price,    // Wholesaler's price is retailer's cost
+              stock: item.quantity,
+              retailerId: retailerProfile.id,
+              unit: item.product.unit,
+              image: item.product.image,
+              status: 'active'
+            }
+          });
+        }
+      }
+
+      return updatedOrder;
+    }, { timeout: 15000 });
 
     res.json({ 
       success: true, 
-      message: 'Purchase order marked as delivered',
-      order: updatedOrder 
+      message: 'Purchase order delivered and inventory updated',
+      order: result 
     });
   } catch (error: any) {
     console.error('❌ Error confirming purchase order delivery:', error);

@@ -1015,10 +1015,13 @@ export const confirmDelivery = async (req: AuthRequest, res: Response) => {
         });
 
         if (existingProduct) {
-          // Update existing stock
+          // Update existing stock and ensure it's active
           await tx.product.update({
             where: { id: existingProduct.id },
-            data: { stock: { increment: item.quantity } }
+            data: { 
+              stock: { increment: item.quantity },
+              status: 'active'
+            }
           });
         } else {
           // Create new product for retailer based on wholesaler's product
@@ -1034,6 +1037,7 @@ export const confirmDelivery = async (req: AuthRequest, res: Response) => {
               stock: item.quantity,
               retailerId: updatedOrder.retailerId,
               unit: item.product.unit,
+              image: item.product.image,
               status: 'active'
             }
           });

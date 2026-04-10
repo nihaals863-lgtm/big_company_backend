@@ -532,6 +532,9 @@ export const getProducts = async (req: AuthRequest, res: Response) => {
 
     if (category) where.category = category as string;
     if (search) where.name = { contains: search as string };
+    
+    // Only show active products to consumers
+    where.status = 'active';
 
     const products = await prisma.product.findMany({
       where,
